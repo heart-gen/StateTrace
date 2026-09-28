@@ -1,0 +1,17 @@
+name: atlasroute
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - anndata
+  - scanpy
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - pip:
+      # scvi-tools (and therefore torch) is intentionally not installed here; install
+      # `atlasroute[scvi]` with a torch build that matches the local CPU/GPU stack.
+      - -e .[dev]

@@ -1,0 +1,93 @@
+[project]
+name = "atlasroute"
+version = "0.1.0"
+description = "Donor-aware framework for building, freezing, validating and transporting cellular-state references across single-cell datasets."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Kynon J Benjamin", email = "kj.benjamin90@gmail.com" }
+]
+keywords = [
+    "single-cell", "snRNA-seq", "reference mapping", "label transfer", "cell state",
+    "donor", "validation", "calibration", "anndata", "scanpy", "bioinformatics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "anndata>=0.10,<1",
+    "scanpy>=1.10,<2",
+    "numpy>=1.26,<3",
+    "pandas>=2.2,<3",
+    "scipy>=1.13,<2",
+    "scikit-learn>=1.5,<2",
+    "matplotlib>=3.8,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "hypothesis>=6.112,<7",
+    "pytest>=8.3,<9",
+    "pytest-cov>=5,<8",
+    "ruff==0.6.9",
+]
+docs = [
+    "myst-parser>=3,<5",
+    "sphinx>=7,<9",
+    "sphinx-autodoc-typehints>=2,<4",
+    "sphinx-copybutton>=0.5,<1",
+    "sphinx-rtd-theme>=3,<4",
+]
+# scvi-tools pulls in torch transitively. torch is never listed directly so users
+# can install the CPU/GPU build that matches their machine.
+scvi = [
+    "scvi-tools>=1.2,<2",
+]
+all = [
+    "atlasroute[dev,docs,scvi]",
+]
+
+[project.urls]
+Homepage = "https://github.com/heart-gen/AtlasRoute"
+Repository = "https://github.com/heart-gen/AtlasRoute"
+Documentation = "https://atlasroute.readthedocs.io/en/latest/"
+"Bug Tracker" = "https://github.com/heart-gen/AtlasRoute/issues"
+
+[tool.poetry]
+packages = [{ include = "atlasroute", from = "src" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["slow: marks tests as slow (skipped unless --run-slow is given)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "C4"]
+# N803/N806: allow scientific single-capital array/matrix names (X, P, V), which match the
+#   surrounding linear-algebra notation and are clearer than lowercase.
+# E501: code line length is enforced by `ruff format`; the residual long lines are
+#   unsplittable strings, comments, and URLs, so we do not double-flag them here.
+ignore = ["N803", "N806", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests gate optional-backend coverage with `pytest.importorskip(...)` and place the
+# guarded imports after it (E402); the bare import is the availability probe (F401).
+"tests/**" = ["E402", "F401"]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use AtlasRoute in your research, please cite the software using the metadata in this file."
+title: "AtlasRoute"
+type: software
+version: "0.1.0"
+date-released: "2026-09-28"
+authors:
+  - family-names: "Benjamin"
+    given-names: "Kynon J. M."
+    orcid: "https://orcid.org/0000-0003-2016-4646"
+abstract: "A donor-aware Python framework for building, freezing, validating and transporting cellular-state references across single-cell and single-nucleus datasets."
+repository-code: "https://github.com/heart-gen/AtlasRoute"
+url: "https://atlasroute.readthedocs.io/en/latest/"
+license: "Apache-2.0"
+license-url: "https://www.apache.org/licenses/LICENSE-2.0"
+keywords:
+  - single-cell
+  - snRNA-seq
+  - reference mapping
+  - label transfer
+  - donor-level validation
+  - calibration
