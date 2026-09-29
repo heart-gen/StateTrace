@@ -38,6 +38,14 @@ A rule-based, descriptive category evaluated in this order with the defaults of
 These are not claims of biological equivalence. Keep the raw columns; the category is a
 reading aid. The thresholds are configurable and should be predeclared in a benchmark.
 
+## Abstention in v0.1
+
+`LODOConfig.abstain_below` predicts `unknown` when the top probability is below the threshold.
+With the kNN backend that probability is a neighbour vote fraction, so it flags ambiguous cells
+between two known states well but out-of-reference cells poorly: a novel state that lies in
+empty latent space still gets a unanimous vote from its nearest known state. Use it to explore
+ambiguity; rely on the v0.2 novelty statistics for out-of-reference detection.
+
 ## Random split
 
 {meth}`~atlasroute.AtlasReference.random_split` runs a stratified K-fold over cells,

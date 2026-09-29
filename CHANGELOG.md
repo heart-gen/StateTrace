@@ -33,5 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stub modules documenting the planned v0.2 API.
 
 ### Known limitations
+- `abstain_below` thresholds the top kNN probability only; on a state present in a single donor
+  it recovers about a third of the novel cells at `0.8` while removing a quarter of coverage
+  elsewhere. Reference-distance and local-support novelty statistics arrive in 0.2.
 - The latent space is fixed across folds (fitted with every donor present); LODO in this
   release measures classifier transfer within a fixed embedding, an optimistic bound.
