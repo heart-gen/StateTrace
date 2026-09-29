@@ -2,10 +2,15 @@
 Distribution-shift diagnostics in a shared latent space.
 
 Three things can happen to a reference state in a query: it is *absent*, it is present but
-*shifted* (its query cells sit away from the reference cells of that state), or query cells
-form a *novel* population no reference state covers. Per cell, StateTrace reports a
-reference-distance z-score (distance to the assigned state's reference centroid in units of
-that state's reference spread) and a category; per state, a centroid shift in the same units.
+*shifted* (its query cells sit away from the reference cells of that state), or query cells form
+a *novel* population no reference state covers. Per cell StateTrace reports a standardised
+reference distance (how many reference standard deviations a cell's distance to its assigned
+state's centroid lies above the typical distance of that state's own reference cells) and a
+category; per state, a centroid shift in per-dimension standard-deviation units.
+
+A whole-cohort offset (a study or batch effect that moves every query cell the same way) is
+estimated as the component-wise median of the per-state centroid displacements and removed
+before scoring, so it is reported once as ``cohort_offset`` rather than as shift in every state.
 """
 
 from __future__ import annotations
@@ -16,34 +21,68 @@ import pandas as pd
 from . import schema
 
 
-def state_centroids_and_spread(
+def state_geometry(
     latent: np.ndarray, state_codes: np.ndarray, n_states: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-state centroid and RMS radius (root mean squared distance of cells to the centroid)."""
+    """
+    Per-state centroid and distance statistics.
+
+    Returns
+    -------
+    centroids
+        (n_states, n_dims).
+    geometry
+        (n_states, 3): RMS radius, mean and standard deviation of the distance of the state's
+        reference cells to its centroid. NaN for states without cells.
+    """
     d = latent.shape[1]
     centroids = np.zeros((n_states, d), dtype=np.float32)
-    spread = np.full(n_states, np.nan, dtype=np.float32)
+    geometry = np.full((n_states, 3), np.nan, dtype=np.float32)
     for k in range(n_states):
         sel = state_codes == k
         if sel.any():
             c = latent[sel].mean(axis=0)
             centroids[k] = c
-            spread[k] = np.sqrt(((latent[sel] - c) ** 2).sum(axis=1).mean())
-    return centroids, spread
+            dist = np.sqrt(((latent[sel] - c) ** 2).sum(axis=1))
+            geometry[k] = (
+                np.sqrt((dist**2).mean()),
+                dist.mean(),
+                dist.std(ddof=1) if sel.sum() > 1 else np.nan,
+            )
+    return centroids, geometry
+
+
+def estimate_cohort_offset(
+    query_latent: np.ndarray, query_codes: np.ndarray, centroids: np.ndarray, *, min_cells: int = 20
+) -> np.ndarray:
+    """Component-wise median of (query state centroid - reference state centroid) over states with enough cells."""
+    disp = []
+    for k in range(centroids.shape[0]):
+        sel = query_codes == k
+        if sel.sum() >= min_cells:
+            disp.append(query_latent[sel].mean(axis=0) - centroids[k])
+    if not disp:
+        return np.zeros(centroids.shape[1], dtype=np.float32)
+    return np.median(np.vstack(disp), axis=0).astype(np.float32)
 
 
 def reference_distance(
-    latent: np.ndarray, assigned_codes: np.ndarray, centroids: np.ndarray, spread: np.ndarray
+    latent: np.ndarray, assigned_codes: np.ndarray, centroids: np.ndarray, geometry: np.ndarray
 ) -> np.ndarray:
-    """Distance of each cell to its assigned state's reference centroid, divided by that state's spread."""
+    """
+    Standardised distance of each cell to its assigned state's reference centroid:
+    ``(distance - mean_ref_distance) / sd_ref_distance`` for that state. Around 0 for cells that
+    look like the state's own reference cells, large and positive for out-of-reference cells.
+    """
     assigned_codes = np.asarray(assigned_codes)
     out = np.full(len(assigned_codes), np.nan)
     ok = assigned_codes >= 0
     if ok.any():
         dist = np.sqrt(((latent[ok] - centroids[assigned_codes[ok]]) ** 2).sum(axis=1))
-        sp = spread[assigned_codes[ok]]
+        mean = geometry[assigned_codes[ok], 1]
+        sd = geometry[assigned_codes[ok], 2]
         with np.errstate(divide="ignore", invalid="ignore"):
-            out[ok] = np.where(sp > 0, dist / sp, np.nan)
+            out[ok] = np.where(sd > 0, (dist - mean) / sd, np.nan)
     return out
 
 
@@ -63,16 +102,22 @@ def centroid_shift(
     query_latent: np.ndarray,
     query_codes: np.ndarray,
     centroids: np.ndarray,
-    spread: np.ndarray,
+    geometry: np.ndarray,
     n_states: int,
 ) -> np.ndarray:
-    """Distance between the query centroid of each assigned state and the reference centroid, in spread units."""
+    """
+    Distance between the query centroid of each assigned state and its reference centroid, in
+    per-dimension standard-deviation units (RMS radius / sqrt(n_dims)), so a displacement along
+    one biological axis is not diluted by the latent dimensionality.
+    """
+    d = query_latent.shape[1]
     out = np.full(n_states, np.nan)
     for k in range(n_states):
         sel = query_codes == k
-        if sel.sum() >= 2 and spread[k] > 0:
+        per_dim_sd = geometry[k, 0] / np.sqrt(d)
+        if sel.sum() >= 2 and np.isfinite(per_dim_sd) and per_dim_sd > 0:
             c = query_latent[sel].mean(axis=0)
-            out[k] = np.sqrt(((c - centroids[k]) ** 2).sum()) / spread[k]
+            out[k] = np.sqrt(((c - centroids[k]) ** 2).sum()) / per_dim_sd
     return out
 
 

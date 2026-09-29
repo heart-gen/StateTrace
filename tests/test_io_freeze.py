@@ -19,15 +19,14 @@ def test_roundtrip_directory_and_transport(validated_ref, transport_pair, tmp_pa
         np.load(npy, allow_pickle=False)
     b = read_frozen(p)
     assert b.manifest["format_version"] == schema.FORMAT_VERSION and b.manifest["validated"] is True
-    assert b.manifest["keys"]["group"] == "donor_id" and b.spread.shape == (
-        len(validated_ref.states_),
-    )
+    assert b.manifest["keys"]["group"] == "donor_id"
+    assert b.geometry.shape == (len(validated_ref.states_), 3)
     np.testing.assert_array_equal(b.latent, validated_ref.latent_)
     ref2 = Reference.load(p)
     assert ref2.is_frozen and not ref2.is_fitted and ref2.group_key == "donor_id"
     ref2.fit()
     assert ref2.validation_.overall["accuracy"] == pytest.approx(res.overall["accuracy"])
-    np.testing.assert_allclose(ref2.spread_, validated_ref.spread_, rtol=1e-5)
+    np.testing.assert_allclose(ref2.geometry_, validated_ref.geometry_, rtol=1e-5)
     r_live = validate_transport(validated_ref, qry, group_key="donor_id")
     r_frozen = validate_transport(ref2, qry, group_key="donor_id")
     assert (r_live.states["status"] == r_frozen.states["status"]).all()

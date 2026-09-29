@@ -30,7 +30,8 @@ downstream inference.
 - `validate_transport()` and `TransportRoute`: per-cell categories (supported / uncertain /
   out_of_reference), per-donor recovery, per-state evidence and transport status
   (supported / supported_with_caution / shifted / insufficient / absent); `TransportConfig`.
-- Distribution-shift diagnostics: reference-distance z-scores and centroid shift (`novelty`).
+- Distribution-shift diagnostics (`novelty`): standardised reference distances, centroid shift in
+  per-dimension sd units, and removal of a whole-cohort latent offset before scoring.
 - `compare_backends()` for backend robustness.
 - `state_abundance()`, `pseudobulk()` with status-based gating; `harmonize_features()` with
   one-to-one ortholog tables; group-aware `calibration_table()` and `IsotonicCalibrator`.

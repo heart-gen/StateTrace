@@ -40,13 +40,18 @@ STATE_COLUMNS = (
     "groups_observed",
     "groups_recovered",
     "recovery_rate",
+    "groups_recovered_in_reference",
     "n_cells",
+    "n_cells_in_reference",
     "fraction_of_query",
     "median_confidence",
     "uncertain_fraction",
     "ood_fraction",
     "shift",
     "shift_level",
+    "shift_in_reference",
+    "shift_in_reference_level",
+    "novel_population",
     "query_recall",
     "status",
 )
@@ -67,15 +72,19 @@ class TransportConfig:
         A group *recovers* an observed state when the median confidence of those cells is at
         least this value and their out-of-reference fraction is at most ``max_ood_fraction``.
     uncertain_below, ood_z
-        Per-cell category cut-offs (see :mod:`statetrace.novelty`).
+        Per-cell category cut-offs; ``ood_z`` is a standardised reference distance
+        (see :mod:`statetrace.novelty`).
     min_groups_recovered
         Fewer recovering groups -> ``insufficient``.
     caution_recovery_rate, caution_uncertain_fraction
         Below / above these -> ``supported_with_caution``.
     max_ood_fraction, shift_moderate, shift_high
         Out-of-reference fraction above ``max_ood_fraction`` or a centroid shift at or above
-        ``shift_high`` (in reference-spread units) -> ``shifted``; between ``shift_moderate``
-        and ``shift_high`` -> caution.
+        ``shift_high`` (in per-dimension reference standard deviations, after removing the
+        cohort offset) -> ``shifted``; between ``shift_moderate`` and ``shift_high`` -> caution.
+    correct_cohort_offset
+        Estimate a whole-cohort latent offset (median per-state centroid displacement) and
+        remove it before distance and shift diagnostics; the offset is reported once.
     require_reference_validation
         Treat an unvalidated reference state as ``moderate`` (caution) rather than ``stable``.
     """
@@ -84,14 +93,15 @@ class TransportConfig:
     min_cells_total: int = 50
     min_confidence: float = 0.6
     uncertain_below: float = 0.6
-    ood_z: float = 2.5
+    ood_z: float = 3.0
     min_groups_recovered: int = 3
     caution_recovery_rate: float = 0.8
     caution_uncertain_fraction: float = 0.2
     max_ood_fraction: float = 0.3
-    shift_moderate: float = 1.0
-    shift_high: float = 2.0
+    shift_moderate: float = 2.0
+    shift_high: float = 4.0
     require_reference_validation: bool = True
+    correct_cohort_offset: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -99,20 +109,30 @@ class TransportConfig:
 
 def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     """
-    Rule-based status for one state, evaluated in order: ``absent`` (too few query cells or
-    no observing group); ``insufficient`` when the reference itself does not reproduce the
-    state; ``shifted`` (high centroid shift or out-of-reference fraction); ``insufficient``
-    when too few query groups recover it; ``supported_with_caution``; else ``supported``.
+    Rule-based status for one state, evaluated in order.
+
+    1. ``absent``: too few query cells or no observing group.
+    2. ``insufficient``: the reference itself does not reproduce the state.
+    3. Displaced (high centroid shift, or out-of-reference fraction above the maximum): if the
+       cells that *do* lie within the reference distribution still recover the state in enough
+       groups with low shift, an out-of-reference population sits next to an otherwise intact
+       state -> ``supported_with_caution`` (``novel_population``); otherwise ``shifted``.
+    4. ``insufficient``: too few query groups recover the state.
+    5. ``supported_with_caution`` on any caution trigger, else ``supported``.
     """
     if row["n_cells"] < cfg.min_cells_total or row["groups_observed"] == 0:
         return "absent"
     rep = row["ref_reproducibility"]
     if rep in ("fragile", "insufficient"):
         return "insufficient"
-    if row["shift_level"] == "high" or (
+    displaced = row["shift_level"] == "high" or (
         np.isfinite(row["ood_fraction"]) and row["ood_fraction"] > cfg.max_ood_fraction
-    ):
-        return "shifted"
+    )
+    if displaced:
+        coherent = row["groups_recovered_in_reference"] >= cfg.min_groups_recovered and row[
+            "shift_in_reference_level"
+        ] in ("low", "moderate")
+        return "supported_with_caution" if coherent else "shifted"
     if row["groups_recovered"] < cfg.min_groups_recovered:
         return "insufficient"
     caution = (
@@ -187,12 +207,30 @@ class TransportRoute:
     def __repr__(self) -> str:  # pragma: no cover
         return f"<TransportRoute {self.predictions.backend}: {len(self.states)} states, {self.cells['group'].nunique()} groups>"
 
+    def _gated_cells(self, exclude_out_of_reference: bool) -> pd.DataFrame:
+        cells = self.cells
+        if exclude_out_of_reference:
+            cells = cells.assign(
+                state=np.where(
+                    cells["category"] == "out_of_reference", schema.UNKNOWN_LABEL, cells["state"]
+                )
+            )
+        return cells
+
     def state_abundance(
-        self, *, states: str | list[str] | None = None, normalize: bool = True
+        self,
+        *,
+        states: str | list[str] | None = None,
+        normalize: bool = True,
+        exclude_out_of_reference: bool = True,
     ) -> pd.DataFrame:
-        """Group x state abundance; ``states`` may be a status such as ``"supported"``."""
+        """
+        Group x state abundance; ``states`` may be a status such as ``"supported"``.
+        Out-of-reference cells are counted as ``unknown`` (so fractions keep the full
+        denominator) unless ``exclude_out_of_reference=False``.
+        """
         return _state_abundance(
-            self.cells,
+            self._gated_cells(exclude_out_of_reference),
             group_col="group",
             state_col="state",
             states=self._select(states),
@@ -206,15 +244,20 @@ class TransportRoute:
         states: str | list[str] | None = "supported",
         layer: str | None = None,
         min_cells: int = 10,
+        exclude_out_of_reference: bool = True,
     ) -> AnnData:
-        """Pseudobulk the query for the selected states (default: only ``supported``)."""
+        """
+        Pseudobulk the query for the selected states (default: only ``supported``), leaving
+        out out-of-reference cells unless ``exclude_out_of_reference=False``.
+        """
         adata = adata if adata is not None else self.query
         if adata is None:
             raise ValueError("pass the query AnnData (the route was built without keeping it)")
+        labels = self._gated_cells(exclude_out_of_reference)["state"]
         return _pseudobulk(
             adata,
             group_key=self.group_key,
-            state_labels=self.cells["state"],
+            state_labels=labels,
             states=self._select(states),
             layer=layer,
             min_cells=min_cells,
@@ -348,15 +391,27 @@ def validate_transport(
     conf = preds.confidence.to_numpy()
     nov = np.full(len(labels), np.nan)
     shift = np.full(len(states), np.nan)
+    cohort_offset = np.zeros(reference.latent_.shape[1], dtype=np.float32)
     if Z is not None:
-        nov = novelty.reference_distance(Z, codes, reference.centroids_, reference.spread_)
+        if cfg.correct_cohort_offset:
+            cohort_offset = novelty.estimate_cohort_offset(
+                Z, codes, reference.centroids_, min_cells=cfg.min_cells_per_group
+            )
+            Z = Z - cohort_offset
+        nov = novelty.reference_distance(Z, codes, reference.centroids_, reference.geometry_)
         shift = novelty.centroid_shift(
-            Z, codes, reference.centroids_, reference.spread_, len(states)
+            Z, codes, reference.centroids_, reference.geometry_, len(states)
         )
     category = novelty.cell_category(
         conf, nov, uncertain_below=cfg.uncertain_below, ood_z=cfg.ood_z
     )
     category[~known] = "out_of_reference"
+    in_ref = category != "out_of_reference"
+    shift_in_ref = np.full(len(states), np.nan)
+    if Z is not None:
+        shift_in_ref = novelty.centroid_shift(
+            Z, np.where(in_ref, codes, -1), reference.centroids_, reference.geometry_, len(states)
+        )
 
     cells = pd.DataFrame(
         {
@@ -386,11 +441,25 @@ def validate_transport(
     groups["fraction_of_group"] = (
         groups["n_cells"] / groups["group"].map(per_group_total).to_numpy()
     )
+    g_in = (
+        cells[in_ref]
+        .groupby(["group", "state"], sort=True)
+        .agg(
+            n_in_reference=("state", "size"),
+            median_confidence_in_reference=("confidence", "median"),
+        )
+        .reset_index()
+    )
+    groups = groups.merge(g_in, on=["group", "state"], how="left")
+    groups["n_in_reference"] = groups["n_in_reference"].fillna(0).astype(int)
     groups["observed"] = groups["n_cells"] >= cfg.min_cells_per_group
     groups["recovered"] = (
         groups["observed"]
         & (groups["median_confidence"].fillna(0) >= cfg.min_confidence)
         & (groups["ood_fraction"] <= cfg.max_ood_fraction)
+    )
+    groups["recovered_in_reference"] = (groups["n_in_reference"] >= cfg.min_cells_per_group) & (
+        groups["median_confidence_in_reference"].fillna(0) >= cfg.min_confidence
     )
     groups = groups[groups["state"] != schema.UNKNOWN_LABEL]
 
@@ -402,7 +471,9 @@ def validate_transport(
             {
                 "groups_observed": gs["observed"].sum(),
                 "groups_recovered": gs["recovered"].sum(),
+                "groups_recovered_in_reference": gs["recovered_in_reference"].sum(),
                 "n_cells": gs["n_cells"].sum(),
+                "n_cells_in_reference": gs["n_in_reference"].sum(),
             }
         )
         .reindex(states)
@@ -424,6 +495,11 @@ def validate_transport(
     )
     st["shift"] = shift
     st["shift_level"] = novelty.shift_level(shift, moderate=cfg.shift_moderate, high=cfg.shift_high)
+    st["shift_in_reference"] = shift_in_ref
+    st["shift_in_reference_level"] = novelty.shift_level(
+        shift_in_ref, moderate=cfg.shift_moderate, high=cfg.shift_high
+    )
+    st["novel_population"] = st["ood_fraction"].fillna(0) > cfg.max_ood_fraction
     meta = (
         reference.metadata_.state_table.reindex(states) if reference.metadata_ is not None else None
     )
@@ -464,6 +540,16 @@ def validate_transport(
             "state_key": reference.state_key,
             "latent": dict(reference.latent_provenance_),
             "validated": reference.validation_ is not None,
+            "latent_available": Z is not None,
+            "cohort_offset_norm": float(np.linalg.norm(cohort_offset)) if Z is not None else None,
+            "cohort_offset_per_dim_sd": (
+                float(
+                    np.linalg.norm(cohort_offset)
+                    / np.nanmedian(reference.geometry_[:, 0] / np.sqrt(reference.latent_.shape[1]))
+                )
+                if Z is not None
+                else None
+            ),
         },
         created=datetime.now(UTC).isoformat(timespec="seconds"),
         statetrace_version=__version__,

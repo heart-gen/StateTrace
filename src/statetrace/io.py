@@ -14,7 +14,7 @@ Layout::
         cells.npz         obs_names, state_code, group_code, study_code, celltype_code (-1 when absent)
         categories.json   code -> label lists
         centroids.npy     float32 (n_states, n_dims) state means
-        spread.npy        float32 (n_states,) RMS radius per state
+        geometry.npy      float32 (n_states, 3) RMS radius, mean and sd of cell-to-centroid distance per state
         state_table.csv   group support per state
         validation/       ValidationResult.to_dir() output (optional)
 """
@@ -64,7 +64,7 @@ class FrozenBundle:
     studies: list[str] | None
     celltypes: list[str] | None
     centroids: np.ndarray
-    spread: np.ndarray
+    geometry: np.ndarray
     state_table: pd.DataFrame
     validation: ValidationResult | None
 
@@ -148,7 +148,7 @@ def write_frozen(
             )
         )
         np.save(out / "centroids.npy", reference.centroids_.astype(np.float32))
-        np.save(out / "spread.npy", reference.spread_.astype(np.float32))
+        np.save(out / "geometry.npy", reference.geometry_.astype(np.float32))
         reference.metadata_.state_table.to_csv(out / "state_table.csv")
         if reference.validation_ is not None:
             reference.validation_.to_dir(
@@ -282,7 +282,7 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
         cells = np.load(_io.BytesIO(src.read("cells.npz")), allow_pickle=False)
         cats = json.loads(src.read("categories.json").decode())
         centroids = np.load(_io.BytesIO(src.read("centroids.npy")), allow_pickle=False)
-        spread = np.load(_io.BytesIO(src.read("spread.npy")), allow_pickle=False)
+        geometry = np.load(_io.BytesIO(src.read("geometry.npy")), allow_pickle=False)
         state_table = pd.read_csv(_io.BytesIO(src.read("state_table.csv")), index_col="state")
         state_table.index = state_table.index.astype(str)
         validation = None
@@ -305,7 +305,7 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
             studies=[str(s) for s in cats["studies"]] if cats.get("studies") else None,
             celltypes=[str(c) for c in cats["celltypes"]] if cats.get("celltypes") else None,
             centroids=np.asarray(centroids, dtype=np.float32),
-            spread=np.asarray(spread, dtype=np.float32),
+            geometry=np.asarray(geometry, dtype=np.float32),
             state_table=state_table,
             validation=validation,
         )

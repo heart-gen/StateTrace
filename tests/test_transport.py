@@ -74,12 +74,25 @@ def test_novel_state_is_out_of_reference():
     assert "S4" not in ref.states_
     route = validate_transport(ref, qry, group_key="donor_id", query_state_key="cell_state")
     novel = route.cells[route.cells["true_state"] == "S4"]
-    assert (novel["category"] == "out_of_reference").mean() > 0.75
+    assert (novel["category"] == "out_of_reference").mean() > 0.9
+    assert route.reference["cohort_offset_norm"] is not None
     assert (
         route.cells.loc[route.cells["true_state"] != "S4", "category"] == "out_of_reference"
     ).mean() < 0.1
     absorbing = novel["state"].mode().iloc[0]
     assert route.states.loc[absorbing, "ood_fraction"] > 0.2
+    assert route.states.loc[absorbing, "novel_population"]
+    assert route.states.loc[absorbing, "status"] == "supported_with_caution"
+    pb = route.pseudobulk(states=[absorbing], min_cells=1)
+    assert pb.obs["n_cells"].sum() == int(
+        (
+            (route.cells["state"] == absorbing) & (route.cells["category"] != "out_of_reference")
+        ).sum()
+    )
+    ab = route.state_abundance(normalize=False)
+    assert "unknown" in ab.columns and ab["unknown"].sum() == int(
+        (route.cells["category"] == "out_of_reference").sum()
+    )
 
 
 def test_external_predictions_match_internal(validated_ref, transport_pair):
@@ -141,20 +154,43 @@ def test_status_rule_table():
         "shift_level": "low",
         "ood_fraction": 0.0,
         "uncertain_fraction": 0.0,
+        "groups_recovered_in_reference": 6,
+        "shift_in_reference_level": "low",
     }
     assert transport_status(base, cfg) == "supported"
     assert transport_status({**base, "n_cells": 10}, cfg) == "absent"
     assert transport_status({**base, "ref_reproducibility": "fragile"}, cfg) == "insufficient"
     assert transport_status({**base, "groups_recovered": 2}, cfg) == "insufficient"
     assert (
-        transport_status({**base, "groups_recovered": 2, "shift_level": "high"}, cfg) == "shifted"
+        transport_status(
+            {
+                **base,
+                "groups_recovered": 2,
+                "shift_level": "high",
+                "groups_recovered_in_reference": 1,
+            },
+            cfg,
+        )
+        == "shifted"
     )
     assert (
         transport_status({**base, "ref_reproducibility": "fragile", "shift_level": "high"}, cfg)
         == "insufficient"
     )
-    assert transport_status({**base, "shift_level": "high"}, cfg) == "shifted"
-    assert transport_status({**base, "ood_fraction": 0.5}, cfg) == "shifted"
+    assert (
+        transport_status({**base, "shift_level": "high", "groups_recovered_in_reference": 1}, cfg)
+        == "shifted"
+    )
+    assert (
+        transport_status({**base, "ood_fraction": 0.5, "groups_recovered_in_reference": 1}, cfg)
+        == "shifted"
+    )
+    assert (
+        transport_status({**base, "ood_fraction": 0.5, "shift_in_reference_level": "high"}, cfg)
+        == "shifted"
+    )
+    # an out-of-reference cloud next to an intact state is a caution, not a shift
+    assert transport_status({**base, "ood_fraction": 0.5}, cfg) == "supported_with_caution"
     assert transport_status({**base, "recovery_rate": 0.5}, cfg) == "supported_with_caution"
     assert transport_status({**base, "uncertain_fraction": 0.3}, cfg) == "supported_with_caution"
     assert transport_status({**base, "shift_level": "moderate"}, cfg) == "supported_with_caution"
@@ -173,7 +209,10 @@ def test_outputs_and_report(validated_ref, transport_pair, tmp_path):
         and pb.n_vars == qry.n_vars
         and (pb.obs["n_cells"] >= 10).all()
     )
-    pb2 = route.pseudobulk(states=["S1"], min_cells=1)
+    pb2 = route.pseudobulk(states=["S1"], min_cells=1, exclude_out_of_reference=False)
+    assert (
+        route.pseudobulk(states=["S1"], min_cells=1).n_obs == 0
+    )  # every S1 cell is out of reference
     assert set(pb2.obs["state"]) == {"S1"}
     route.to_obs()
     assert (

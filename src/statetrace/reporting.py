@@ -51,6 +51,7 @@ def write_report(
             "uncertain_fraction",
             "ood_fraction",
             "shift_level",
+            "novel_population",
             "status",
         ]
     ].copy()
@@ -80,7 +81,7 @@ def write_report(
         "Columns: reference groups supporting the state and its grouped-holdout reproducibility; "
         "query groups that recovered the state (of all query groups); recovery rate among groups "
         "observing it; median mapping confidence; fraction of its cells that are uncertain or "
-        "out of reference; centroid shift in reference-spread units.",
+        "out of reference; centroid shift level (per-dimension reference sd, after cohort-offset removal); whether an out-of-reference population sits next to the state.",
         "",
         "## Rules",
         "",

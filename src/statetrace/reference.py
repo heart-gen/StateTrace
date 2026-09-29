@@ -117,7 +117,7 @@ class StateReference:
         self.reference_id_: str | None = None
         self.is_frozen: bool = False
         self._centroids: np.ndarray | None = None
-        self._spread: np.ndarray | None = None
+        self._geometry: np.ndarray | None = None
 
     # ------------------------------------------------------------------ state
     @property
@@ -140,7 +140,7 @@ class StateReference:
 
     def _ensure_geometry(self) -> None:
         if self._centroids is None:
-            self._centroids, self._spread = novelty.state_centroids_and_spread(
+            self._centroids, self._geometry = novelty.state_geometry(
                 self.latent_, self.state_codes_, len(self.states_)
             )
 
@@ -152,11 +152,16 @@ class StateReference:
         return self._centroids
 
     @property
-    def spread_(self) -> np.ndarray:
-        """Per-state RMS distance of reference cells to their centroid (novelty unit)."""
+    def geometry_(self) -> np.ndarray:
+        """Per-state (RMS radius, mean distance, sd of distance) of reference cells to their centroid."""
         self._check_latent()
         self._ensure_geometry()
-        return self._spread
+        return self._geometry
+
+    @property
+    def spread_(self) -> np.ndarray:
+        """Per-state RMS distance of reference cells to their centroid."""
+        return self.geometry_[:, 0]
 
     def _check_latent(self) -> None:
         if self.latent_ is None:
@@ -401,7 +406,7 @@ class StateReference:
         ref.group_codes_ = b.group_codes
         ref.study_codes_ = b.study_codes if b.studies else None
         ref.celltype_codes_ = b.celltype_codes if b.celltypes else None
-        ref._centroids, ref._spread = b.centroids, b.spread
+        ref._centroids, ref._geometry = b.centroids, b.geometry
         ref.latent_provenance_ = dict(m.get("latent", {}))
         ref.reference_id_ = m.get("reference_id")
         ref.validation_ = b.validation
