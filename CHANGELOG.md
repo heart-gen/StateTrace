@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Frozen biological space (`statetrace.expression`): donor x state pseudobulk profiles of the
   reference, standardised gene-wise by the reference between-donor mean and shrunk sd, a PCA
-  fitted on the standardised reference rows, and a held-out reference-donor null of the
-  standardised distance. Built at `StateReference.fit()` from counts (`expression=` takes an
+  fitted on the standardised reference rows, per-donor offset removal (each donor's median
+  standardised profile over its states, applied to held-out reference donors and query donors
+  alike) and a held-out reference-donor null of the standardised distance. Built at `StateReference.fit()` from counts (`expression=` takes an
   `ExpressionConfig` or `False`), frozen under `expression/` (format 3; format 2 bundles still load).
 - `validate_transport` now judges **state shift** in the frozen expression space whenever the
   reference carries one and the query has its genes (`TransportConfig.shift_source`,

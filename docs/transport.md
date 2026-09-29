@@ -130,16 +130,23 @@ of them; a warning is raised below 90 % retention and the retention is recorded 
 
 ## Cohort offset
 
-A study or batch effect that moves every query cell the same way is estimated as the
-component-wise median of the per-state displacements and removed before the distance and
-shift diagnostics (`TransportConfig.correct_cohort_offset`), in both coordinate systems. In
-the latent it is the median centroid displacement; in expression space it is the gene-wise
-median over states of the mean standardised displacement of the query donors, estimated only
-when at least three states carry query profiles. Its size is reported once per system in
-`route.reference["cohort_offset_per_dim_sd"]` and `route.reference["expression"]["cohort_offset_rms"]`
-rather than as shift in every state. A platform effect whose size differs by state is
-indistinguishable from biology by this estimate; the benchmark's platform system quantifies
-how much of it survives.
+A study or batch effect that moves every query cell the same way is estimated and removed
+before the distance and shift diagnostics (`TransportConfig.correct_cohort_offset`), in both
+coordinate systems. In the latent it is the component-wise median of the per-state centroid
+displacements. In expression space the unit is the donor: a donor's genotype, age, sex or
+processing batch moves all of its states together, so each donor's gene-wise median
+standardised profile over the states it carries (at least
+`ExpressionConfig.offset_min_states`, default 3) is subtracted before scoring, for held-out
+reference donors when the null is built and for query donors alike (`group_offset`). A
+state-specific shift survives the median as long as fewer than half of a donor's states
+shift. Donors carrying fewer states receive the cohort-wide median offset. The sizes are
+reported once in `route.reference["cohort_offset_per_dim_sd"]` (latent) and
+`route.reference["expression"]["cohort_offset_rms"]` (expression, the median donor offset)
+rather than as shift in every state. Per-donor centring is what makes the pseudobulk test
+sensitive: the between-donor spread of pseudobulk distances is dominated by shared donor
+offsets, and removing them narrows the held-out null several-fold. A platform effect whose
+size differs by state is indistinguishable from biology by this estimate; the benchmark's
+platform system quantifies how much of it survives.
 
 ## Held-out novelty calibration
 

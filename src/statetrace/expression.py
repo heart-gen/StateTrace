@@ -71,6 +71,15 @@ class ExpressionConfig:
         Library-size normalisation target before ``log1p``.
     beyond_z
         ``|z|`` above which a gene counts as beyond the reference donor range.
+    group_offset
+        Remove each donor's own offset (the gene-wise median of its standardised profiles over
+        the states it carries, when it carries at least ``offset_min_states``) before scoring.
+        A donor's genotype, age, sex or processing batch moves all of its states together;
+        a state-specific shift survives the median. Applied identically to held-out reference
+        donors (the null) and to query donors.
+    offset_min_states
+        Minimum states a donor must carry for its own offset to be estimated; donors with
+        fewer states receive the cohort-wide median offset instead.
     """
 
     layer: str | None = None
@@ -81,6 +90,8 @@ class ExpressionConfig:
     shrinkage: float = 2.0
     target_sum: float = 1e4
     beyond_z: float = 2.0
+    group_offset: bool = True
+    offset_min_states: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         import dataclasses
@@ -296,6 +307,37 @@ def score_profiles(
     return out
 
 
+def remove_group_offsets(
+    Z: np.ndarray,
+    group_codes: np.ndarray,
+    *,
+    min_states: int = 3,
+    cohort_offset: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """
+    Subtract each donor's gene-wise median standardised profile over the states it carries.
+
+    Donors with fewer than ``min_states`` profiles receive ``cohort_offset`` (the median of
+    the estimated donor offsets, or the given vector) instead. Returns the centred matrix and
+    the cohort offset actually used (``None`` when nothing could be estimated).
+    """
+    g = np.asarray(group_codes)
+    Z = np.array(Z, dtype=np.float64, copy=True)
+    offsets: dict[int, np.ndarray] = {}
+    for d in np.unique(g):
+        sel = g == d
+        if sel.sum() >= min_states:
+            offsets[int(d)] = np.median(Z[sel], axis=0)
+    if cohort_offset is None and offsets:
+        cohort_offset = np.median(np.vstack(list(offsets.values())), axis=0)
+    for d in np.unique(g):
+        sel = g == d
+        off = offsets.get(int(d), cohort_offset)
+        if off is not None:
+            Z[sel] -= off
+    return Z, cohort_offset
+
+
 def holdout_null(
     profiles: np.ndarray, rows: pd.DataFrame, n_states: int, cfg: ExpressionConfig
 ) -> pd.DataFrame:
@@ -310,16 +352,26 @@ def holdout_null(
         ok = np.isfinite(Z).all(axis=1)
         if not ok.any():
             continue
+        Z, st, sub = Z[ok], st[ok], sub[ok].reset_index(drop=True)
+        ref_Z, ref_st = fit["Z"], fit["rows"]["state"].to_numpy()
+        if cfg.group_offset:
+            # the held-out donor is centred on itself; a single donor has no cohort fallback
+            Z, _ = remove_group_offsets(
+                Z, np.zeros(len(st), dtype=int), min_states=cfg.offset_min_states
+            )
+            ref_Z, _ = remove_group_offsets(
+                ref_Z, fit["rows"]["group"].to_numpy(), min_states=cfg.offset_min_states
+            )
         m = score_profiles(
-            Z[ok],
-            st[ok],
+            Z,
+            st,
             components=fit["components"],
-            reference_Z=fit["Z"],
-            reference_states=fit["rows"]["state"].to_numpy(),
+            reference_Z=ref_Z,
+            reference_states=ref_st,
             beyond_z=cfg.beyond_z,
         )
-        m.insert(0, "n_cells", sub.loc[ok, "n_cells"].to_numpy())
-        m.insert(0, "state", st[ok])
+        m.insert(0, "n_cells", sub["n_cells"].to_numpy())
+        m.insert(0, "state", st)
         m.insert(0, "group", int(d))
         records.append(m)
     if not records:
@@ -498,7 +550,9 @@ def score_query(
     min_cells
         Minimum cells per donor x state profile.
     correct_cohort_offset
-        Remove the gene-wise median displacement across states before scoring.
+        Remove offsets before scoring: each query donor's own offset when the space was built
+        with ``group_offset`` (the default), else the gene-wise median displacement across
+        states shared by the whole cohort.
     counts
         Whether ``X`` holds raw counts; detected when ``None``.
 
@@ -526,20 +580,30 @@ def score_query(
     ok = np.isfinite(Z).all(axis=1)
     Z, rows, st = Z[ok], rows[ok].reset_index(drop=True), st[ok]
     offset = None
-    if correct_cohort_offset and len(rows):
-        offset = estimate_cohort_offset(Z, st)
-        if offset is not None:
-            Z = Z - offset
+    per_group = bool(space.params.get("group_offset", False))
+    min_states = int(space.params.get("offset_min_states", 3))
     ref_rows = space.rows
     ref_st = ref_rows["state"].to_numpy()
     ref_Z = (sub["profiles"] - sub["mu"][ref_st]) / sub["sigma"][ref_st]
     ref_ok = np.isfinite(ref_Z).all(axis=1)
+    ref_Z = ref_Z[ref_ok]
+    if correct_cohort_offset and len(rows):
+        if per_group:
+            Z, offset = remove_group_offsets(Z, rows["group"].to_numpy(), min_states=min_states)
+        else:
+            offset = estimate_cohort_offset(Z, st, min_states=min_states)
+            if offset is not None:
+                Z = Z - offset
+    if per_group:
+        ref_Z, _ = remove_group_offsets(
+            ref_Z, ref_rows.loc[ref_ok, "group"].to_numpy(), min_states=min_states
+        )
     if len(rows):
         m = score_profiles(
             Z,
             st,
             components=sub["components"],
-            reference_Z=ref_Z[ref_ok],
+            reference_Z=ref_Z,
             reference_states=ref_st[ref_ok],
             beyond_z=float(space.params.get("beyond_z", 2.0)),
         )
@@ -562,6 +626,9 @@ def score_query(
         "feature_retention": float(len(idx) / space.n_genes) if space.n_genes else np.nan,
         "n_genes_scored": int(len(idx)),
         "cohort_offset_rms": float(np.sqrt((offset**2).mean())) if offset is not None else None,
+        "offset": "group"
+        if (correct_cohort_offset and per_group)
+        else ("cohort" if correct_cohort_offset else "none"),
         "input": "counts" if input_counts else "non_count",
         "pc_decomposition": sub["components"] is not None,
     }
