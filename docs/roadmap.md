@@ -11,6 +11,16 @@ it is comparable to or better than the main comparators on the previous layer's 
 | 0.4 | hierarchical states, plotting, CLI | G3 brain and G4 application |
 | later | genetics annotation export, spatial and multi-omic references | — |
 
+## Planned: cell-level frozen-expression displacement
+
+The donor x state pseudobulk distance is the primary shift evidence because donors are the
+replication unit. Its planned complement applies the same frozen standardisation and PCA to
+single cells (with a null from held-out reference cells rather than donors), to locate a
+shifted subpopulation *within* a donor x state that the pseudobulk averages over. Together
+with mapping-space identity this separates: same identity and same molecular state; same
+identity and shifted molecular state; poor identity assignment; a truly out-of-reference
+population.
+
 ## Release criteria for v1.0
 
 Measured before the stable release and tracked in the benchmark repository's `UTILITY.md`.

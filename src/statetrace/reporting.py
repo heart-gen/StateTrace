@@ -51,6 +51,8 @@ def write_report(
             "uncertain_fraction",
             "ood_fraction",
             "shift_level",
+            "shift_source",
+            "groups_shifted",
             "novel_population",
             "status",
         ]
@@ -58,7 +60,11 @@ def write_report(
     show["groups_recovered"] = (
         show["groups_recovered"].astype(str) + "/" + show["query_groups"].astype(str)
     )
+    show["groups_shifted"] = (
+        show["groups_shifted"].astype(str) + "/" + st["groups_scored_expression"].astype(str)
+    )
     show = show.drop(columns="query_groups")
+    expr = route.reference.get("expression", {}) or {}
     md = [
         "# StateTrace transport report",
         "",
@@ -81,7 +87,30 @@ def write_report(
         "Columns: reference groups supporting the state and its grouped-holdout reproducibility; "
         "query groups that recovered the state (of all query groups); recovery rate among groups "
         "observing it; median mapping confidence; fraction of its cells that are uncertain or "
-        "out of reference; centroid shift level (per-dimension reference sd, after cohort-offset removal); whether an out-of-reference population sits next to the state.",
+        "out of reference; shift level and the coordinate system it was judged in (`expression`: "
+        "median over query donors of the donor x state pseudobulk distance, standardised against "
+        "held-out reference donors in the frozen expression space; `latent`: centroid shift in "
+        "per-dimension reference sd in the mapping latent; both after cohort-offset removal); "
+        "query donors whose pseudobulk lies at or beyond the high-shift threshold (of donors "
+        "scored); whether an out-of-reference population sits next to the state.",
+        "",
+        "## Coordinate systems",
+        "",
+        "State identity (label, confidence, per-cell reference distance) comes from the mapping "
+        f"space of **{route.predictions.backend}**"
+        + (
+            " (query latent available)"
+            if route.reference.get("latent_available")
+            else " (no query latent: per-cell distance unavailable)"
+        )
+        + ". State shift comes from the frozen expression space"
+        + (
+            f" ({expr.get('n_genes_scored')} genes, feature retention "
+            f"{expr.get('feature_retention', float('nan')):.0%}, cohort offset RMS "
+            f"{expr.get('cohort_offset_rms') if expr.get('cohort_offset_rms') is not None else float('nan'):.2f} sd)."
+            if expr.get("available")
+            else " when the reference carries one; this reference does not, so shift falls back to the mapping latent."
+        ),
         "",
         "## Rules",
         "",

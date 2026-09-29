@@ -31,9 +31,12 @@ STABILITY_CATEGORIES = ("stable", "moderate", "fragile", "insufficient")
 CELL_CATEGORIES = ("supported", "uncertain", "out_of_reference")
 TRANSPORT_STATUS = ("supported", "supported_with_caution", "shifted", "insufficient", "absent")
 SHIFT_LEVELS = ("low", "moderate", "high", "unknown")
+SHIFT_SOURCES = ("expression", "latent", "none")  # coordinate system behind a shift call
 VALIDATION_METHODS = ("leave_one_group_out", "leave_one_study_out", "random_split")
 
 # frozen reference format
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
+MIN_READABLE_FORMAT_VERSION = 2  # v2 lacks the expression/ directory; everything else is identical
 FROZEN_SUFFIX = ".statetrace"
 MANIFEST_FILE = "manifest.json"
+EXPRESSION_DIR = "expression"

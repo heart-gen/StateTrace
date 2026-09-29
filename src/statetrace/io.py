@@ -17,6 +17,9 @@ Layout::
         geometry.npy      float32 (n_states, 3) RMS radius, mean and sd of cell-to-centroid distance per state
         state_table.csv   group support per state
         validation/       ValidationResult.to_dir() output (optional)
+        expression/       frozen expression space (optional, format 3): genes.json, mu.npy,
+                          sigma.npy, n_groups.npy, components.npy, profiles.npy, rows.csv,
+                          null.csv, null_stats.csv, params.json
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ import pandas as pd
 from . import schema
 
 if TYPE_CHECKING:
+    from .expression import ExpressionSpace
     from .reference import StateReference
     from .validation import ValidationResult
 
@@ -67,6 +71,7 @@ class FrozenBundle:
     geometry: np.ndarray
     state_table: pd.DataFrame
     validation: ValidationResult | None
+    expression: ExpressionSpace | None = None
 
 
 def _sha256(path: Path) -> str:
@@ -154,6 +159,8 @@ def write_frozen(
             reference.validation_.to_dir(
                 out / "validation", include_cell_predictions=include_cell_predictions
             )
+        if reference.expression_ is not None:
+            _write_expression(reference.expression_, out / schema.EXPRESSION_DIR)
         files = {str(p.relative_to(out)): _sha256(p) for p in sorted(out.rglob("*")) if p.is_file()}
         backend_name = (
             getattr(reference.backend_, "name", "external")
@@ -190,6 +197,9 @@ def write_frozen(
                 "min_cells_per_state": reference.min_cells_per_state,
             },
             "validated": reference.validation_ is not None,
+            "expression": dict(reference.expression_.params)
+            if reference.expression_ is not None
+            else None,
             "files": files,
         }
         (out / schema.MANIFEST_FILE).write_text(json.dumps(manifest, indent=2))
@@ -204,6 +214,47 @@ def write_frozen(
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
     return target
+
+
+def _write_expression(space: ExpressionSpace, out: Path) -> None:
+    out.mkdir()
+    (out / "genes.json").write_text(json.dumps([str(g) for g in space.genes]))
+    np.save(out / "mu.npy", np.asarray(space.mu, dtype=np.float32))
+    np.save(out / "sigma.npy", np.asarray(space.sigma, dtype=np.float32))
+    np.save(out / "n_groups.npy", np.asarray(space.n_groups, dtype=np.int32))
+    np.save(out / "components.npy", np.asarray(space.components, dtype=np.float32))
+    np.save(out / "profiles.npy", np.asarray(space.profiles, dtype=np.float32))
+    space.rows.to_csv(out / "rows.csv", index=False)
+    space.null.to_csv(out / "null.csv", index=False)
+    space.null_stats.to_csv(out / "null_stats.csv")
+    (out / "params.json").write_text(json.dumps(space.params, indent=2, default=str))
+
+
+def _read_expression(src: _Source, states: list[str]) -> ExpressionSpace | None:
+    from .expression import ExpressionSpace
+
+    d = schema.EXPRESSION_DIR
+    if not src.exists(f"{d}/params.json"):
+        return None
+
+    def arr(name: str) -> np.ndarray:
+        return np.load(_io.BytesIO(src.read(f"{d}/{name}")), allow_pickle=False)
+
+    null_stats = pd.read_csv(_io.BytesIO(src.read(f"{d}/null_stats.csv")), index_col="state")
+    null_stats.index = null_stats.index.astype(str)
+    return ExpressionSpace(
+        genes=np.asarray(json.loads(src.read(f"{d}/genes.json").decode())).astype(str),
+        states=np.asarray(states).astype(str),
+        profiles=arr("profiles.npy"),
+        rows=pd.read_csv(_io.BytesIO(src.read(f"{d}/rows.csv"))),
+        mu=arr("mu.npy"),
+        sigma=arr("sigma.npy"),
+        n_groups=arr("n_groups.npy"),
+        components=arr("components.npy"),
+        null=pd.read_csv(_io.BytesIO(src.read(f"{d}/null.csv"))),
+        null_stats=null_stats,
+        params=json.loads(src.read(f"{d}/params.json").decode()),
+    )
 
 
 class _Source:
@@ -270,7 +321,7 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
             raise FrozenReferenceError(
                 f"{path}: format_version {fv} is newer than this StateTrace supports ({schema.FORMAT_VERSION})"
             )
-        if fv < schema.FORMAT_VERSION:
+        if fv < schema.MIN_READABLE_FORMAT_VERSION:
             raise FrozenReferenceError(
                 f"{path}: format_version {fv} predates the group/study layout; re-freeze the reference"
             )
@@ -292,6 +343,7 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
                 validation = ValidationResult.from_dir(src.extract_dir("validation", tmp))
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
+        states = [str(s) for s in cats["states"]]
         return FrozenBundle(
             manifest=manifest,
             latent=np.asarray(latent, dtype=np.float32),
@@ -300,7 +352,7 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
             group_codes=np.asarray(cells["group_code"], dtype=np.int32),
             study_codes=np.asarray(cells["study_code"], dtype=np.int32),
             celltype_codes=np.asarray(cells["celltype_code"], dtype=np.int32),
-            states=[str(s) for s in cats["states"]],
+            states=states,
             groups=[str(g) for g in cats["groups"]],
             studies=[str(s) for s in cats["studies"]] if cats.get("studies") else None,
             celltypes=[str(c) for c in cats["celltypes"]] if cats.get("celltypes") else None,
@@ -308,6 +360,7 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
             geometry=np.asarray(geometry, dtype=np.float32),
             state_table=state_table,
             validation=validation,
+            expression=_read_expression(src, states),
         )
     finally:
         src.close()

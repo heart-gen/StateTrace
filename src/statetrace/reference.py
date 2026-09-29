@@ -15,6 +15,7 @@ import pandas as pd
 from . import novelty, schema
 from .backends import get_backend
 from .backends.base import AnnDataBackend, MappingBackend
+from .expression import ExpressionConfig, ExpressionSpace, build_expression_space
 from .utils import MetadataReport, resolve_latent, validate_metadata
 from .validation import LODOConfig, ValidationResult, run_validation
 
@@ -51,6 +52,12 @@ class StateReference:
         Constructor arguments when ``backend`` is a name.
     min_groups_per_state, min_cells_per_state
         Support thresholds for the ``eligible`` flag in the state table.
+    expression
+        :class:`~statetrace.expression.ExpressionConfig` for the frozen expression space
+        (donor x state pseudobulk shift diagnostics, see :mod:`statetrace.expression`), built
+        from ``adata.X`` or ``layers[expression.layer]`` at :meth:`fit`. ``True`` (default)
+        builds it with default settings whenever the reference has genes; ``False`` skips it,
+        in which case shift diagnostics fall back to the mapping latent.
 
     Examples
     --------
@@ -76,6 +83,7 @@ class StateReference:
         min_groups_per_state: int = 3,
         min_cells_per_state: int = 100,
         random_state: int = 0,
+        expression: ExpressionConfig | bool = True,
     ) -> None:
         if group_key is None and donor_key is None:
             raise TypeError("group_key (or its alias donor_key) is required")
@@ -91,6 +99,14 @@ class StateReference:
         self.min_groups_per_state = int(min_groups_per_state)
         self.min_cells_per_state = int(min_cells_per_state)
         self.random_state = int(random_state)
+        if isinstance(expression, bool):
+            self.expression_config: ExpressionConfig | None = (
+                ExpressionConfig() if expression else None
+            )
+        elif isinstance(expression, ExpressionConfig):
+            self.expression_config = expression
+        else:
+            raise TypeError("expression must be an ExpressionConfig or a bool")
         if isinstance(backend, str):
             self._backend_template = get_backend(backend, **(backend_params or {}))
         elif isinstance(backend, MappingBackend | AnnDataBackend):
@@ -116,6 +132,7 @@ class StateReference:
         self.validation_: ValidationResult | None = None
         self.reference_id_: str | None = None
         self.is_frozen: bool = False
+        self.expression_: ExpressionSpace | None = None
         self._centroids: np.ndarray | None = None
         self._geometry: np.ndarray | None = None
 
@@ -164,6 +181,11 @@ class StateReference:
         return self.validation_.distance_calibration if self.validation_ is not None else None
 
     @property
+    def has_expression(self) -> bool:
+        """Whether a frozen expression space travels with this reference."""
+        return self.expression_ is not None
+
+    @property
     def spread_(self) -> np.ndarray:
         """Per-state RMS distance of reference cells to their centroid."""
         return self.geometry_[:, 0]
@@ -182,6 +204,7 @@ class StateReference:
         return (
             f"<StateReference {self.latent_.shape[0]} cells, {len(self.groups_)} groups, "
             f"{len(self.states_)} states, {self.latent_.shape[1]}-d latent"
+            f"{', expression' if self.expression_ is not None else ''}"
             f"{', frozen' if self.is_frozen else ''}{', validated' if self.validation_ else ''}>"
         )
 
@@ -231,6 +254,29 @@ class StateReference:
             self.celltype_codes_ = np.asarray(obs[self.celltype_key].cat.codes, dtype=np.int32)
         self.obs_names_ = np.asarray(obs.index).astype(str)
         self._centroids = None
+        self.expression_ = None
+        if self.expression_config is not None and self.adata.n_vars > 0:
+            X = (
+                self.adata.layers[self.expression_config.layer]
+                if self.expression_config.layer is not None
+                else self.adata.X
+            )
+            try:
+                self.expression_ = build_expression_space(
+                    X,
+                    self.adata.var_names,
+                    self.group_codes_,
+                    self.state_codes_,
+                    self.states_,
+                    config=self.expression_config,
+                )
+            except ValueError as err:
+                warnings.warn(
+                    f"expression space not built ({err}); shift diagnostics will use the "
+                    "mapping latent. Pass expression=ExpressionConfig(min_cells=...) to adjust.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         if self.uses_anndata_backend:
             self.backend_ = self._backend_template.clone().fit(self.adata, state_key=self.state_key)
         else:
@@ -246,6 +292,7 @@ class StateReference:
             "study_key": self.study_key,
             "latent": dict(self.latent_provenance_),
             "backend": {"name": self.backend_.name, "params": self.backend_.get_params()},
+            "expression": dict(self.expression_.params) if self.expression_ is not None else None,
         }
         logger.info(
             "fitted reference: %d cells, %d groups, %d states, %d-d latent",
@@ -400,8 +447,10 @@ class StateReference:
             backend_params=m["backend"]["params"] if m["backend"]["name"] == "knn" else None,
             min_groups_per_state=m["thresholds"]["min_groups_per_state"],
             min_cells_per_state=m["thresholds"]["min_cells_per_state"],
+            expression=False,
         )
         ref.latent_ = b.latent
+        ref.expression_ = b.expression
         ref.states_ = np.asarray(b.states).astype(str)
         ref.groups_ = np.asarray(b.groups).astype(str)
         ref.studies_ = np.asarray(b.studies).astype(str) if b.studies else None

@@ -52,6 +52,16 @@ def _allowed_matrix(
     return allowed
 
 
+def _counts_from_latent(
+    rng: np.random.Generator, z: np.ndarray, W: np.ndarray, b: np.ndarray
+) -> Any:
+    """Poisson counts ``X = Poisson(exp(W z + b))`` as a float32 CSR matrix."""
+    from scipy import sparse
+
+    rate = np.exp(np.clip(z @ W.T + b, -10.0, 8.0))
+    return sparse.csr_matrix(rng.poisson(rate).astype(np.float32))
+
+
 def simulate_reference(
     *,
     n_donors: int = 8,
@@ -107,7 +117,6 @@ def simulate_reference(
         ``batch``; ``uns["statetrace_synthetic"]`` records the parameters.
     """
     import anndata as ad
-    from scipy import sparse
 
     if n_donors < 1 or n_states < 1 or n_cells_per_donor < 1:
         raise ValueError("n_donors, n_states and n_cells_per_donor must be >= 1")
@@ -154,8 +163,7 @@ def simulate_reference(
             else rng.normal(0.0, 0.5 / np.sqrt(n_latent), size=(n_genes, n_latent))
         )
         b = _shared["b"] if _shared and "b" in _shared else rng.normal(1.0, 0.5, size=n_genes)
-        rate = np.exp(np.clip(z @ W.T + b, -10.0, 8.0))
-        X = sparse.csr_matrix(rng.poisson(rate).astype(np.float32))
+        X = _counts_from_latent(rng, z, W, b)
         var = pd.DataFrame(index=pd.Index([f"gene{i}" for i in range(n_genes)], name="gene"))
     else:
         X = np.empty((n_cells, 0), dtype=np.float32)
@@ -239,6 +247,13 @@ def simulate_transport(
         Two AnnData objects (``obs``: ``donor_id``, ``cell_state``, ``cell_type``, ``batch``,
         ``study``) and a table with the planted category per state
         (``stable``, ``shifted``, ``novel``, ``absent``, ``minority``).
+
+    Notes
+    -----
+    With ``n_genes > 0`` the query counts are generated from the *final* query latent, so the
+    cohort effect and every planted shift are present in expression as well as in
+    ``obsm[latent_key]``. A mapper that only sees the counts therefore faces the planted
+    scenario, and the frozen expression space can detect it.
     """
     rng = np.random.default_rng(seed)
     states = [f"S{i}" for i in range(n_states)]
@@ -308,6 +323,8 @@ def simulate_transport(
         direction *= float(mag) / np.linalg.norm(direction)
         Z[code == states.index(s)] += direction
     query.obsm[latent_key] = Z.astype(np.float32)
+    if n_genes > 0:
+        query.X = _counts_from_latent(np.random.default_rng(seed + 3), Z, shared["W"], shared["b"])
     # drop the reference-only categories from the query's categorical so tables stay honest
     query.obs["cell_state"] = query.obs["cell_state"].cat.remove_unused_categories()
 

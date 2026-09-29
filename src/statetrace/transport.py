@@ -6,6 +6,16 @@ built-in kNN mapping or a :class:`~statetrace.predictions.Predictions` object fr
 external tool, and answers, per state: is it reproducible in the reference; is it recovered
 in enough query groups (donors); is the query version shifted, uncertain or partly out of
 reference; and therefore is it **supported** for group-level downstream inference.
+
+Two coordinate systems feed the evidence. **State identity** (which state a cell belongs to,
+its confidence, and the per-cell reference distance) comes from the *mapping space*, the
+latent of whichever tool produced the predictions. **State shift** (whether the molecular
+phenotype of a state in the query donors lies within the reference's between-donor variation)
+comes from the *frozen biological space* of :mod:`statetrace.expression`, built from the
+reference's expression before any query was seen. Mapping spaces are fitted with the query
+present and can absorb a state-specific displacement as if it were a batch effect, so the
+shift call prefers the expression space whenever the reference carries one and the query has
+the genes; the latent centroid shift is kept as secondary evidence.
 """
 
 from __future__ import annotations
@@ -13,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from . import expression as _expr
 from . import novelty, schema
 from .aggregation import pseudobulk as _pseudobulk
 from .aggregation import state_abundance as _state_abundance
@@ -29,6 +41,7 @@ from .predictions import Predictions
 if TYPE_CHECKING:
     from anndata import AnnData
 
+    from .features import FeatureMap
     from .reference import StateReference
 
 logger = logging.getLogger(__name__)
@@ -51,6 +64,15 @@ STATE_COLUMNS = (
     "shift_level",
     "shift_in_reference",
     "shift_in_reference_level",
+    "shift_source",
+    "expression_shift",
+    "expression_shift_level",
+    "expression_shift_in_reference",
+    "groups_shifted",
+    "groups_scored_expression",
+    "latent_shift",
+    "latent_shift_level",
+    "latent_shift_in_reference",
     "novel_population",
     "query_recall",
     "status",
@@ -79,12 +101,23 @@ class TransportConfig:
     caution_recovery_rate, caution_uncertain_fraction
         Below / above these -> ``supported_with_caution``.
     max_ood_fraction, shift_moderate, shift_high
-        Out-of-reference fraction above ``max_ood_fraction`` or a centroid shift at or above
-        ``shift_high`` (in per-dimension reference standard deviations, after removing the
-        cohort offset) -> ``shifted``; between ``shift_moderate`` and ``shift_high`` -> caution.
+        Out-of-reference fraction above ``max_ood_fraction`` or a shift at or above
+        ``shift_high`` -> ``shifted``; between ``shift_moderate`` and ``shift_high`` -> caution.
+        The shift is in reference standard-deviation units in either coordinate system: the
+        median over query donors of the donor x state pseudobulk distance standardised against
+        held-out reference donors (expression space), or the centroid displacement in
+        per-dimension reference sd (mapping latent).
+    shift_source
+        ``"auto"`` uses the frozen expression space when the reference carries one and the
+        query has its genes, else the mapping latent; ``"expression"`` or ``"latent"`` force
+        one (an unavailable source leaves the shift ``unknown``).
+    expression_layer
+        Query ``layers`` key holding raw counts for the expression-space diagnostic (``None``:
+        ``query.X``).
     correct_cohort_offset
-        Estimate a whole-cohort latent offset (median per-state centroid displacement) and
-        remove it before distance and shift diagnostics; the offset is reported once.
+        Estimate a whole-cohort offset (median per-state displacement, in the latent and in
+        standardised expression) and remove it before distance and shift diagnostics; the
+        offset is reported once per coordinate system.
     novelty_calibration
         ``"holdout"`` standardises reference distances against the leave-one-group-out
         distance statistics stored with the reference (falls back to in-sample when none
@@ -107,6 +140,12 @@ class TransportConfig:
     require_reference_validation: bool = True
     correct_cohort_offset: bool = True
     novelty_calibration: str = "holdout"
+    shift_source: str = "auto"
+    expression_layer: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.shift_source not in ("auto", "expression", "latent"):
+            raise ValueError("shift_source must be 'auto', 'expression' or 'latent'")
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -118,10 +157,11 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
 
     1. ``absent``: too few query cells or no observing group.
     2. ``insufficient``: the reference itself does not reproduce the state.
-    3. Displaced (high centroid shift, or out-of-reference fraction above the maximum): if the
-       cells that *do* lie within the reference distribution still recover the state in enough
-       groups with low shift, an out-of-reference population sits next to an otherwise intact
-       state -> ``supported_with_caution`` (``novel_population``); otherwise ``shifted``.
+    3. Displaced (high shift in the deciding coordinate system, or out-of-reference fraction
+       above the maximum): if the cells that *do* lie within the reference distribution still
+       recover the state in enough groups with low shift, an out-of-reference population sits
+       next to an otherwise intact state -> ``supported_with_caution`` (``novel_population``);
+       otherwise ``shifted``.
     4. ``insufficient``: too few query groups recover the state.
     5. ``supported_with_caution`` on any caution trigger, else ``supported``.
     """
@@ -167,6 +207,11 @@ class TransportRoute:
         Per query cell: group, state, confidence, margin, support, novelty, category.
     predictions
         The :class:`~statetrace.predictions.Predictions` that were evaluated.
+    expression
+        Query donor x state pseudobulk shift table from the frozen expression space
+        (``None`` when the diagnostic did not run): ``group``, ``state``, ``n_cells``,
+        ``distance``, ``distance_pc``, ``residual``, ``nearest``, ``genes_beyond``,
+        ``shift_z``, ``shift_p`` and ``in_reference_only``.
     """
 
     group_key: str
@@ -179,6 +224,7 @@ class TransportRoute:
     created: str
     statetrace_version: str
     query: Any = field(default=None, repr=False)
+    expression: pd.DataFrame | None = field(default=None, repr=False)
 
     @property
     def supported_states(self) -> list[str]:
@@ -328,6 +374,66 @@ def _predictions_from_reference(
     return preds, Z
 
 
+def _expression_shift(
+    reference: StateReference,
+    query: AnnData,
+    group_codes: np.ndarray,
+    group_names: np.ndarray,
+    state_codes: np.ndarray,
+    in_reference: np.ndarray,
+    cfg: TransportConfig,
+    feature_map: FeatureMap | None,
+) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    """Score query donor x state pseudobulks (all assigned cells, and in-reference cells only)."""
+    from .features import harmonize_features
+
+    space = reference.expression_
+    assert space is not None
+    fmap = feature_map or harmonize_features(space.genes, query.var_names)
+    mapping = fmap.mapping[fmap.mapping["reference"].isin(space.genes)]
+    if len(mapping) == 0:
+        warnings.warn(
+            "none of the reference expression-space genes are in the query; expression shift "
+            "is unknown. Pass feature_map= for cross-species transport.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return None, {"available": False, "feature_retention": 0.0}
+    gene_pos = pd.Index(space.genes).get_indexer(mapping["reference"].to_numpy())
+    order = np.argsort(gene_pos)
+    gene_pos = gene_pos[order]
+    q_cols = query.var_names.get_indexer(mapping["query"].to_numpy()[order])
+    retention = len(gene_pos) / space.n_genes
+    if retention < 0.9:
+        warnings.warn(
+            f"only {retention:.0%} of the reference expression-space genes are in the query; "
+            "pseudobulk distances are computed on the retained genes and compared with a null "
+            "built on all of them.",
+            UserWarning,
+            stacklevel=3,
+        )
+    X = query.layers[cfg.expression_layer] if cfg.expression_layer is not None else query.X
+    X = X[:, q_cols]
+    tables = []
+    for only_in_ref in (False, True):
+        codes = np.where(in_reference, state_codes, -1) if only_in_ref else state_codes
+        t, prov = _expr.score_query(
+            space,
+            X,
+            group_codes,
+            codes,
+            gene_index=gene_pos,
+            min_cells=cfg.min_cells_per_group,
+            correct_cohort_offset=cfg.correct_cohort_offset,
+        )
+        t["in_reference_only"] = only_in_ref
+        tables.append((t, prov))
+    table = pd.concat([t for t, _ in tables], ignore_index=True)
+    table["group"] = np.asarray(group_names).astype(str)[table["group"].to_numpy()]
+    prov = {"available": True, **tables[0][1]}
+    return table, prov
+
+
 def validate_transport(
     reference: StateReference,
     query: AnnData,
@@ -337,6 +443,7 @@ def validate_transport(
     latent_key: str | None = None,
     query_state_key: str | None = None,
     config: TransportConfig | None = None,
+    feature_map: FeatureMap | None = None,
     keep_query: bool = True,
 ) -> TransportRoute:
     """
@@ -361,6 +468,10 @@ def validate_transport(
         Optional query labels for computing state recall (benchmarks only).
     config
         :class:`TransportConfig`.
+    feature_map
+        A :class:`~statetrace.features.FeatureMap` (for example from an ortholog table)
+        aligning query features to the reference's; by default features are intersected by
+        name. Only the genes of the frozen expression space are used.
     keep_query
         Keep a handle to ``query`` on the route so ``pseudobulk()`` needs no argument.
     """
@@ -422,6 +533,35 @@ def validate_transport(
             Z, np.where(in_ref, codes, -1), reference.centroids_, reference.geometry_, len(states)
         )
 
+    # frozen biological space: donor x state pseudobulk shift
+    group_codes_q, group_names_q = pd.factorize(query.obs[group_key].astype(str), sort=True)
+    expr_table: pd.DataFrame | None = None
+    expr_prov: dict[str, Any] = {"available": False}
+    expr_shift = np.full(len(states), np.nan)
+    expr_shift_in = np.full(len(states), np.nan)
+    groups_shifted = np.zeros(len(states), dtype=int)
+    groups_scored = np.zeros(len(states), dtype=int)
+    want_expr = cfg.shift_source in ("auto", "expression")
+    if want_expr and reference.expression_ is not None and query.n_vars > 0:
+        expr_table, expr_prov = _expression_shift(
+            reference, query, group_codes_q, group_names_q, codes, in_ref, cfg, feature_map
+        )
+        if expr_table is not None:
+            all_rows = expr_table[~expr_table["in_reference_only"]]
+            in_rows = expr_table[expr_table["in_reference_only"]]
+            expr_shift, groups_shifted, groups_scored = _expr.summarise_states(
+                all_rows, len(states), high=cfg.shift_high
+            )
+            expr_shift_in, _, _ = _expr.summarise_states(in_rows, len(states), high=cfg.shift_high)
+            expr_table["state"] = states[expr_table["state"].to_numpy()]
+    elif cfg.shift_source == "expression":
+        warnings.warn(
+            "shift_source='expression' but the reference carries no expression space or the "
+            "query has no genes; shift is unknown.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     cells = pd.DataFrame(
         {
             "group": query.obs[group_key].astype(str).to_numpy(),
@@ -471,6 +611,22 @@ def validate_transport(
         groups["median_confidence_in_reference"].fillna(0) >= cfg.min_confidence
     )
     groups = groups[groups["state"] != schema.UNKNOWN_LABEL]
+    if expr_table is not None:
+        e = expr_table[~expr_table["in_reference_only"]][
+            ["group", "state", "distance", "shift_z", "shift_p"]
+        ].rename(
+            columns={
+                "distance": "expression_distance",
+                "shift_z": "expression_shift_z",
+                "shift_p": "expression_shift_p",
+            }
+        )
+        groups = groups.merge(e, on=["group", "state"], how="left")
+    else:
+        groups["expression_distance"] = np.nan
+        groups["expression_shift_z"] = np.nan
+        groups["expression_shift_p"] = np.nan
+    groups["shifted"] = groups["expression_shift_z"].to_numpy(dtype=float) >= cfg.shift_high
 
     # state table
     n_groups_query = int(cells["group"].nunique())
@@ -502,11 +658,30 @@ def validate_transport(
     st["ood_fraction"] = (
         cs["category"].apply(lambda c: float((c == "out_of_reference").mean())).reindex(states)
     )
-    st["shift"] = shift
-    st["shift_level"] = novelty.shift_level(shift, moderate=cfg.shift_moderate, high=cfg.shift_high)
-    st["shift_in_reference"] = shift_in_ref
+    st["latent_shift"] = shift
+    st["latent_shift_level"] = novelty.shift_level(
+        shift, moderate=cfg.shift_moderate, high=cfg.shift_high
+    )
+    st["latent_shift_in_reference"] = shift_in_ref
+    st["expression_shift"] = expr_shift
+    st["expression_shift_level"] = novelty.shift_level(
+        expr_shift, moderate=cfg.shift_moderate, high=cfg.shift_high
+    )
+    st["expression_shift_in_reference"] = expr_shift_in
+    st["groups_shifted"] = groups_shifted
+    st["groups_scored_expression"] = groups_scored
+    use_expr = np.isfinite(expr_shift) & (cfg.shift_source != "latent")
+    use_lat = ~use_expr & np.isfinite(shift) & (cfg.shift_source != "expression")
+    st["shift_source"] = np.where(use_expr, "expression", np.where(use_lat, "latent", "none"))
+    st["shift"] = np.where(use_expr, expr_shift, np.where(use_lat, shift, np.nan))
+    st["shift_level"] = novelty.shift_level(
+        st["shift"], moderate=cfg.shift_moderate, high=cfg.shift_high
+    )
+    st["shift_in_reference"] = np.where(
+        use_expr, expr_shift_in, np.where(use_lat, shift_in_ref, np.nan)
+    )
     st["shift_in_reference_level"] = novelty.shift_level(
-        shift_in_ref, moderate=cfg.shift_moderate, high=cfg.shift_high
+        st["shift_in_reference"], moderate=cfg.shift_moderate, high=cfg.shift_high
     )
     st["novel_population"] = st["ood_fraction"].fillna(0) > cfg.max_ood_fraction
     meta = (
@@ -566,10 +741,12 @@ def validate_transport(
                 if Z is not None
                 else None
             ),
+            "expression": expr_prov,
         },
         created=datetime.now(UTC).isoformat(timespec="seconds"),
         statetrace_version=__version__,
         query=query if keep_query else None,
+        expression=expr_table,
     )
     logger.info("transport: %s", route.summary().replace("\n", " | "))
     return route

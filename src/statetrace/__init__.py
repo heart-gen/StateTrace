@@ -41,6 +41,10 @@ __all__ = [
     "TransportConfig",
     "compare_backends",
     "BackendComparison",
+    # frozen biological space
+    "ExpressionConfig",
+    "ExpressionSpace",
+    "build_expression_space",
     # outputs
     "state_abundance",
     "pseudobulk",
@@ -77,6 +81,9 @@ _lazy = {
     "TransportConfig": (".transport", "TransportConfig"),
     "compare_backends": (".robustness", "compare_backends"),
     "BackendComparison": (".robustness", "BackendComparison"),
+    "ExpressionConfig": (".expression", "ExpressionConfig"),
+    "ExpressionSpace": (".expression", "ExpressionSpace"),
+    "build_expression_space": (".expression", "build_expression_space"),
     "state_abundance": (".aggregation", "state_abundance"),
     "pseudobulk": (".aggregation", "pseudobulk"),
     "harmonize_features": (".features", "harmonize_features"),
@@ -117,6 +124,7 @@ if TYPE_CHECKING:
     from .backends.knn import KNNBackend
     from .calibration import calibration_table
     from .datasets.synthetic import simulate_reference, simulate_transport
+    from .expression import ExpressionConfig, ExpressionSpace, build_expression_space
     from .features import FeatureMap, harmonize_features
     from .io import FrozenReferenceError, read_frozen, write_frozen
     from .predictions import Predictions

@@ -7,10 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Frozen biological space (`statetrace.expression`): donor x state pseudobulk profiles of the
+  reference, standardised gene-wise by the reference between-donor mean and shrunk sd, a PCA
+  fitted on the standardised reference rows, and a held-out reference-donor null of the
+  standardised distance. Built at `StateReference.fit()` from counts (`expression=` takes an
+  `ExpressionConfig` or `False`), frozen under `expression/` (format 3; format 2 bundles still load).
+- `validate_transport` now judges **state shift** in the frozen expression space whenever the
+  reference carries one and the query has its genes (`TransportConfig.shift_source`,
+  `expression_layer`; `feature_map=` for ortholog-mapped queries). New state columns
+  `shift_source`, `expression_shift[_level|_in_reference]`, `groups_shifted`,
+  `groups_scored_expression`, `latent_shift[_level|_in_reference]`; `shift` and `shift_level`
+  hold the deciding value. Per donor x state: `route.expression` and
+  `expression_distance` / `expression_shift_z` / `expression_shift_p` / `shifted` in `groups`.
+  The transport report states which coordinate system each conclusion came from.
+
+### Changed
+- `simulate_transport` regenerates the query counts from the final query latent, so the cohort
+  effect and every planted shift are present in expression as well as in `obsm`. Before, only
+  the latent carried them, and a mapper that saw the counts never faced the planted scenario.
+- Frozen reference format version 3.
+
 ### Planned
 - scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
 - Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
-- Plotting and a CLI.
+- Plotting.
+- Cell-level frozen-expression displacement (the within-donor complement of the pseudobulk shift).
 
 ## [0.1.0] - 2026-09-28
 
