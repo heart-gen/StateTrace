@@ -129,3 +129,67 @@ def shift_level(shift: np.ndarray | pd.Series, *, moderate: float, high: float) 
     lvl[np.isfinite(s) & (s >= high)] = "high"
     assert set(lvl) <= set(schema.SHIFT_LEVELS)
     return lvl
+
+
+def holdout_distance_calibration(
+    latent: np.ndarray,
+    state_codes: np.ndarray,
+    folds: list[tuple[str, np.ndarray]],
+    n_states: int,
+    states: np.ndarray | list[str],
+) -> pd.DataFrame:
+    """
+    Per-state distance statistics of *held-out* cells to centroids built from the training
+    folds only. Unlike :func:`state_geometry`, these include the effect of an unseen group
+    (donor), so standardising query distances against them gives an out-of-reference rate
+    close to the nominal one for genuinely new donors.
+
+    Returns
+    -------
+    DataFrame indexed by state with ``n_holdout``, ``mean_holdout``, ``sd_holdout``,
+    ``q95_holdout``, ``q99_holdout`` and, for comparison, ``mean_in_sample``, ``sd_in_sample``.
+    """
+    dists: list[list[float]] = [[] for _ in range(n_states)]
+    for _, test in folds:
+        train = ~test
+        for k in range(n_states):
+            tr = train & (state_codes == k)
+            te = test & (state_codes == k)
+            if tr.sum() < 2 or not te.any():
+                continue
+            c = latent[tr].mean(axis=0)
+            dists[k].extend(np.sqrt(((latent[te] - c) ** 2).sum(axis=1)).tolist())
+    _, geom = state_geometry(latent, state_codes, n_states)
+    rows = []
+    for k, s_ in enumerate(states):
+        d = np.asarray(dists[k], dtype=float)
+        rows.append(
+            {
+                "state": str(s_),
+                "n_holdout": int(d.size),
+                "mean_holdout": float(d.mean()) if d.size else np.nan,
+                "sd_holdout": float(d.std(ddof=1)) if d.size > 1 else np.nan,
+                "q95_holdout": float(np.quantile(d, 0.95)) if d.size else np.nan,
+                "q99_holdout": float(np.quantile(d, 0.99)) if d.size else np.nan,
+                "mean_in_sample": float(geom[k, 1]),
+                "sd_in_sample": float(geom[k, 2]),
+            }
+        )
+    return pd.DataFrame(rows).set_index("state")
+
+
+def calibrated_geometry(
+    geometry: np.ndarray, calibration: pd.DataFrame | None, states: np.ndarray | list[str]
+) -> np.ndarray:
+    """
+    Geometry array for :func:`reference_distance`: in-sample RMS radius in column 0 (the shift
+    unit) and held-out mean / sd in columns 1-2 where available, in-sample otherwise.
+    """
+    out = np.array(geometry, dtype=np.float32, copy=True)
+    if calibration is None:
+        return out
+    cal = calibration.reindex([str(s) for s in states])
+    ok = cal["sd_holdout"].notna().to_numpy() & (cal["sd_holdout"].to_numpy() > 0)
+    out[ok, 1] = cal.loc[ok, "mean_holdout"].to_numpy()
+    out[ok, 2] = cal.loc[ok, "sd_holdout"].to_numpy()
+    return out

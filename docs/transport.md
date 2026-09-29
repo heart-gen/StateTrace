@@ -69,3 +69,14 @@ A study or batch effect that moves every query cell the same way is estimated as
 component-wise median of the per-state centroid displacements and removed before the distance
 and shift diagnostics (`TransportConfig.correct_cohort_offset`). Its size is reported once in
 `route.reference["cohort_offset_per_dim_sd"]` rather than as shift in every state.
+
+## Held-out novelty calibration
+
+Grouped validation records, per state, the distances of held-out cells to centroids built from
+the training donors only (`ValidationResult.distance_calibration`). These include the effect of an
+unseen donor, so `validate_transport` standardises query distances against them by default
+(`TransportConfig.novelty_calibration="holdout"`), falling back to in-sample statistics for a
+reference that was never validated. The choice is recorded in `route.reference["novelty_calibration"]`. Held-out statistics are
+wider than in-sample ones, so the trade-off is fewer false out-of-reference calls on genuine
+cells from new donors against somewhat lower sensitivity to a novel population that happens to
+sit near an existing state; the benchmark's withheld-state layer quantifies both.

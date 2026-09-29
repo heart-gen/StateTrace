@@ -159,6 +159,11 @@ class StateReference:
         return self._geometry
 
     @property
+    def distance_calibration_(self) -> pd.DataFrame | None:
+        """Held-out distance statistics per state from grouped validation, or ``None``."""
+        return self.validation_.distance_calibration if self.validation_ is not None else None
+
+    @property
     def spread_(self) -> np.ndarray:
         """Per-state RMS distance of reference cells to their centroid."""
         return self.geometry_[:, 0]

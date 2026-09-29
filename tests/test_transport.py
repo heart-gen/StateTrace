@@ -231,3 +231,36 @@ def test_outputs_and_report(validated_ref, transport_pair, tmp_path):
     detached = validate_transport(validated_ref, qry, group_key="donor_id", keep_query=False)
     with pytest.raises(ValueError, match="query AnnData"):
         detached.pseudobulk()
+
+
+def test_holdout_calibration_lowers_false_ood(transport_pair):
+    import warnings
+
+    from statetrace import TransportConfig
+
+    ref_adata, qry, _ = transport_pair
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), **REF_KW).fit()
+        res = ref.leave_one_group_out()
+    cal = res.distance_calibration
+    assert cal is not None and list(cal.index) == list(ref.states_)
+    assert (cal["n_holdout"] > 0).all()
+    assert (cal["mean_holdout"] >= cal["mean_in_sample"] - 1e-6).all()
+    r_hold = validate_transport(ref, qry, group_key="donor_id", query_state_key="cell_state")
+    r_in = validate_transport(
+        ref,
+        qry,
+        group_key="donor_id",
+        query_state_key="cell_state",
+        config=TransportConfig(novelty_calibration="in_sample"),
+    )
+    assert (
+        r_hold.reference["novelty_calibration"] == "holdout"
+        and r_in.reference["novelty_calibration"] == "in_sample"
+    )
+    stable = r_hold.cells["true_state"].isin(["S0", "S2"])
+    f_hold = (r_hold.cells.loc[stable, "category"] == "out_of_reference").mean()
+    f_in = (r_in.cells.loc[stable, "category"] == "out_of_reference").mean()
+    assert f_hold <= f_in and f_hold < 0.05
+    assert (r_hold.states.loc[["S0", "S2"], "status"] == "supported").all()

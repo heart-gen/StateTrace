@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from . import metrics, schema
+from . import metrics, novelty, schema
 from .backends.base import AnnDataBackend, MappingBackend
 
 if TYPE_CHECKING:
@@ -133,6 +133,7 @@ class ValidationResult:
     latent: dict[str, Any]
     created: str
     statetrace_version: str
+    distance_calibration: pd.DataFrame | None = None
 
     # donor-flavoured aliases for the common case
     @property
@@ -209,6 +210,8 @@ class ValidationResult:
         self.group_metrics.to_csv(path / "group_metrics.csv", index=False)
         self.group_summary.to_csv(path / "group_summary.csv", index=False)
         self.confusion_matrix.to_csv(path / "confusion_matrix.csv")
+        if self.distance_calibration is not None:
+            self.distance_calibration.to_csv(path / "distance_calibration.csv")
         if include_cell_predictions:
             self.cell_predictions.to_csv(path / "cell_predictions.csv.gz", index_label="cell")
         if self.per_group_confusion:
@@ -240,6 +243,11 @@ class ValidationResult:
             cell_predictions.index = cell_predictions.index.astype(str)
         else:
             cell_predictions = pd.DataFrame(columns=list(metrics.CELL_COLUMNS))
+        cal_file = path / "distance_calibration.csv"
+        calibration = None
+        if cal_file.exists():
+            calibration = pd.read_csv(cal_file, index_col="state")
+            calibration.index = calibration.index.astype(str)
         per_group: dict[str, pd.DataFrame] | None = None
         pdc = path / "per_group_confusion"
         if pdc.is_dir():
@@ -263,6 +271,7 @@ class ValidationResult:
             latent=meta["latent"],
             created=meta["created"],
             statetrace_version=meta["statetrace_version"],
+            distance_calibration=calibration,
         )
 
 
@@ -549,7 +558,12 @@ def run_validation(
     cp = pd.concat(parts, ignore_index=True)
     cp.index = pd.Index(idx.astype(str), name="cell")
     cp = cp.reindex(np.asarray(obs_names).astype(str))
-    return summarize_holdout(
+    calibration = None
+    if X is not None and method != "random_split":
+        calibration = novelty.holdout_distance_calibration(
+            X, state_codes, folds, len(states), states
+        )
+    result = summarize_holdout(
         cp,
         states=states,
         group_key=group_key,
@@ -562,3 +576,5 @@ def run_validation(
         metadata_state_table=metadata_state_table,
         latent={**latent_provenance, "refit_latent": False},
     )
+    result.distance_calibration = calibration
+    return result

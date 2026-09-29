@@ -54,6 +54,13 @@ between two known states well but out-of-reference cells poorly: a novel state t
 empty latent space still gets a unanimous vote from its nearest known state. Use it to explore
 ambiguity; rely on the v0.2 novelty statistics for out-of-reference detection.
 
+### Distance calibration
+
+With the built-in kNN, every fold also records the distance of each held-out cell to the
+centroid of its state built from the training groups. The per-state mean, sd and quantiles of
+those distances (`ValidationResult.distance_calibration`) are the null distribution for a genuine
+cell of the state from an unseen donor; transport uses them to standardise novelty.
+
 ## Random split
 
 {meth}`~statetrace.AtlasReference.random_split` runs a stratified K-fold over cells,

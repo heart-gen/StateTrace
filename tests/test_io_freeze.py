@@ -26,6 +26,9 @@ def test_roundtrip_directory_and_transport(validated_ref, transport_pair, tmp_pa
     assert ref2.is_frozen and not ref2.is_fitted and ref2.group_key == "donor_id"
     ref2.fit()
     assert ref2.validation_.overall["accuracy"] == pytest.approx(res.overall["accuracy"])
+    assert ref2.distance_calibration_ is not None and len(ref2.distance_calibration_) == len(
+        ref2.states_
+    )
     np.testing.assert_allclose(ref2.geometry_, validated_ref.geometry_, rtol=1e-5)
     r_live = validate_transport(validated_ref, qry, group_key="donor_id")
     r_frozen = validate_transport(ref2, qry, group_key="donor_id")

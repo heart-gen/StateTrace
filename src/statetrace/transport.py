@@ -85,6 +85,10 @@ class TransportConfig:
     correct_cohort_offset
         Estimate a whole-cohort latent offset (median per-state centroid displacement) and
         remove it before distance and shift diagnostics; the offset is reported once.
+    novelty_calibration
+        ``"holdout"`` standardises reference distances against the leave-one-group-out
+        distance statistics stored with the reference (falls back to in-sample when none
+        exist); ``"in_sample"`` always uses the reference's own cells.
     require_reference_validation
         Treat an unvalidated reference state as ``moderate`` (caution) rather than ``stable``.
     """
@@ -102,6 +106,7 @@ class TransportConfig:
     shift_high: float = 4.0
     require_reference_validation: bool = True
     correct_cohort_offset: bool = True
+    novelty_calibration: str = "holdout"
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -398,7 +403,11 @@ def validate_transport(
                 Z, codes, reference.centroids_, min_cells=cfg.min_cells_per_group
             )
             Z = Z - cohort_offset
-        nov = novelty.reference_distance(Z, codes, reference.centroids_, reference.geometry_)
+        calibration = (
+            reference.distance_calibration_ if cfg.novelty_calibration == "holdout" else None
+        )
+        geometry = novelty.calibrated_geometry(reference.geometry_, calibration, states)
+        nov = novelty.reference_distance(Z, codes, reference.centroids_, geometry)
         shift = novelty.centroid_shift(
             Z, codes, reference.centroids_, reference.geometry_, len(states)
         )
@@ -541,6 +550,13 @@ def validate_transport(
             "latent": dict(reference.latent_provenance_),
             "validated": reference.validation_ is not None,
             "latent_available": Z is not None,
+            "novelty_calibration": (
+                "holdout"
+                if Z is not None
+                and cfg.novelty_calibration == "holdout"
+                and reference.distance_calibration_ is not None
+                else ("in_sample" if Z is not None else None)
+            ),
             "cohort_offset_norm": float(np.linalg.norm(cohort_offset)) if Z is not None else None,
             "cohort_offset_per_dim_sd": (
                 float(
