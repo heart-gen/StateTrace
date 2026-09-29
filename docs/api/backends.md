@@ -1,12 +1,12 @@
-# `atlasroute.backends`
+# `statetrace.backends`
 
 ```{eval-rst}
-.. automodule:: atlasroute.backends
+.. automodule:: statetrace.backends
    :members: get_backend, BACKENDS
 
-.. automodule:: atlasroute.backends.base
+.. automodule:: statetrace.backends.base
    :members:
 
-.. automodule:: atlasroute.backends.knn
+.. automodule:: statetrace.backends.knn
    :members:
 ```

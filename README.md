@@ -1,103 +1,121 @@
-# AtlasRoute
+# StateTrace
 
-[![CI](https://github.com/heart-gen/AtlasRoute/actions/workflows/ci.yml/badge.svg)](https://github.com/heart-gen/AtlasRoute/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/atlasroute.svg)](https://pypi.org/project/atlasroute/)
-[![Python](https://img.shields.io/pypi/pyversions/atlasroute.svg)](https://pypi.org/project/atlasroute/)
-[![Docs](https://readthedocs.org/projects/atlasroute/badge/?version=latest)](https://atlasroute.readthedocs.io/en/latest/)
+[![CI](https://github.com/heart-gen/StateTrace/actions/workflows/ci.yml/badge.svg)](https://github.com/heart-gen/StateTrace/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/statetrace.svg)](https://pypi.org/project/statetrace/)
+[![Python](https://img.shields.io/pypi/pyversions/statetrace.svg)](https://pypi.org/project/statetrace/)
+[![Docs](https://readthedocs.org/projects/statetrace/badge/?version=latest)](https://statetrace.readthedocs.io/en/latest/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-AtlasRoute is a donor-aware framework for building, freezing, validating and transporting
-cellular-state references across single-cell and single-nucleus datasets. Cellular states
-are routinely defined in one cohort and applied to another, but standard workflows say
-little about whether those states reproduce across donors, whether a query is represented
-by the reference, or whether downstream disease associations rest on robust states rather
-than uncertain label transfer. AtlasRoute treats donors, not cells, as the replication
-unit and treats label transfer as one component of a reference-validation and transport
-framework. It is tissue-, disease- and atlas-agnostic.
+StateTrace is a backend-independent framework for donor- and cohort-aware validation of
+cellular-state transportability and downstream inference. Mapping tools (scPoli, scANVI/scArches,
+Symphony, Azimuth, CellTypist, or a user classifier) decide which state a cell belongs to.
+StateTrace takes their output and decides something they were not designed to answer: **is a
+cellular state defined in one human cohort reproducible and transportable enough to support
+inference in another?** It treats donors, not cells, as the replication unit; it reports
+reproducibility across reference donors, recovery in an independent cohort, robustness to the
+mapping backend, and distribution shift; and it gates which states may enter differential
+abundance, pseudobulk expression or genetic analyses. It is tissue-, disease- and atlas-agnostic.
 
 ## Core capabilities
 
-- **Donor-aware reference validation.** Leave-one-donor-out recovery of every state,
-  with donor x state recall, per-donor balanced accuracy, state-level medians, minima
-  and recovery rates, and a rule-based `lodo_stability` reading aid.
-- **The optimistic control, side by side.** A stratified random split over cells
-  (the conventional benchmark) is one call away, so the donor effect shows as a gap.
-- **Pluggable mapping backends.** A k-nearest-neighbour classifier in a frozen latent
-  space ships in 0.1; scVI/scANVI is planned. AtlasRoute does not invent an integration
-  method; it validates whichever one you use.
-- **Abstention.** Held-out cells below a confidence floor are predicted `unknown`
-  instead of forced into the nearest state (data-driven query thresholds in 0.2).
-- **Frozen references.** An immutable, checksummed, pickle-free `.atlasroute` bundle of
-  latent coordinates, labels, donor statistics and validation tables.
-- **Seeded synthetic references** for tests, tutorials and controlled benchmarks.
+- **Grouped validation.** Leave-one-donor-out and leave-one-study-out holdouts with group x
+  state recall, per-group balanced accuracy, and a rule-based `reproducibility` category
+  (stable / moderate / fragile / insufficient); the conventional random cell split is one call
+  away so the optimism of standard practice is visible as a gap.
+- **Backend-agnostic.** `Predictions.from_scpoli / from_scanvi / from_symphony / from_azimuth /
+  from_celltypist / from_obs` normalise any tool's labels and confidence; external mappers can
+  also be refitted inside every holdout fold through `AnnDataBackend`. A kNN baseline is built in.
+- **Cross-cohort transport validation.** Per state: reference reproducibility, query donors
+  recovering it, uncertain and out-of-reference fractions, centroid shift, and a transport status.
+- **Backend robustness.** `compare_backends` reports cell agreement, per-state concordance and
+  whether the transport status agrees across mappers.
+- **Distribution-shift diagnostics.** Absent, shifted and novel populations are distinguished
+  with reference-distance z-scores in the shared latent.
+- **Inference gating.** `supported`, `supported_with_caution`, `shifted`, `insufficient`,
+  `absent`; `route.pseudobulk(states="supported")` and `route.state_abundance(states="supported")`.
+- **Transport report.** Standardised CSV tables plus a Markdown summary of the evidence for every
+  state, suitable to accompany a publication.
+- **Frozen references** (checksummed, pickle-free `.statetrace` bundles) and **seeded
+  simulations** of reference/query cohort pairs with planted stable, shifted, minority, absent and
+  novel states.
 
 ## Installation
 
 ```bash
-pip install atlasroute
+pip install statetrace
 ```
 
 | Extra | Adds | Needed for |
 |---|---|---|
 | `dev` | pytest, pytest-cov, hypothesis, ruff | tests and linting |
 | `docs` | sphinx, myst-parser, sphinx-rtd-theme | building the docs |
-| `scvi` | scvi-tools (pulls in torch) | the scVI backend (0.2) |
+| `scvi` | scvi-tools (pulls in torch) | the scANVI refit-per-fold backend (planned) |
 | `all` | all of the above | |
 
-torch is never a direct dependency; install the build that matches your machine before
-adding the `scvi` extra. Python 3.11 to 3.14.
+torch is never a direct dependency; install the build that matches your machine before adding
+the `scvi` extra. Python 3.11 to 3.14.
 
 ## Quickstart
 
 ```python
-import atlasroute as ar
-from atlasroute.datasets import simulate_reference
+import statetrace as st
+from statetrace.datasets import simulate_transport
 
-adata = simulate_reference(n_donors=8, n_states=5, n_cells_per_donor=200, donor_effect=0.7, seed=1)
+ref_adata, query_adata, truth = simulate_transport(
+    n_ref_groups=8, n_query_groups=6, n_states=5, n_latent=10,
+    shifted_states={"S1": 9.0}, absent_states=["S4"], minority_states={"S3": 0.25}, seed=5,
+)
 
-ref = ar.Reference(adata, donor_key="donor_id", state_key="cell_state", latent_key="X_latent").fit()
+# 1. reference: validate by donor, then freeze
+ref = st.Reference(ref_adata, group_key="donor_id", state_key="cell_state", latent_key="X_latent").fit()
+res = ref.leave_one_group_out()
+res.state_metrics[["n_groups_reference", "median_group_recall", "group_recovery_rate", "reproducibility"]]
+ref.freeze("my_reference.statetrace")
 
-res = ref.leave_one_donor_out()          # one fold per donor
-print(res.summary())
-res.state_metrics[["n_donors_reference", "median_donor_recall", "min_donor_recall", "lodo_stability"]]
+# 2. transport into an independent cohort (built-in kNN, or predictions from any tool)
+route = st.validate_transport(ref, query_adata, group_key="donor_id")
+route.states[["ref_reproducibility", "groups_recovered", "query_groups", "shift_level", "ood_fraction", "status"]]
 
-ctrl = ref.random_split(n_splits=5)      # the cell-level, optimistic control
-ctrl.overall["accuracy"] - res.overall["accuracy"]   # the donor effect
+preds = st.Predictions.from_scpoli(query_adata)          # after running scPoli yourself
+route_scpoli = st.validate_transport(ref, query_adata, group_key="donor_id", predictions=preds)
+st.compare_backends({"knn": route, "scpoli": route_scpoli}).summary()
 
-ref.freeze("my_reference.atlasroute")    # immutable bundle; ar.Reference.load(...) restores it
+# 3. gate downstream inference
+route.supported_states
+pb = route.pseudobulk(states="supported")                # donor x state pseudobulk AnnData
+route.report("results/statetrace_report")
 ```
 
-With real data, point `latent_key` at a precomputed embedding (`"X_scVI"`, `"X_pca_harmony"`)
-and `donor_key` / `state_key` at your `obs` columns. Leave `latent_key=None` to compute a
-PCA from counts.
+The transport table reads, for example:
 
-Outputs of a validation run:
+| state | ref_reproducibility | groups_recovered | shift_level | ood_fraction | status |
+|---|---|---|---|---|---|
+| S0 | stable | 6/6 | low | 0.00 | supported |
+| S1 | stable | 6/6 | high | 0.01 | shifted |
+| S3 | insufficient | 6/6 | low | 0.00 | insufficient |
+| S4 | stable | 0/6 | unknown | | absent |
 
-| Attribute | Content |
-|---|---|
-| `state_metrics` | one row per state: donor support, median/min/variance of donor recall, recovery rate, pooled precision/recall/F1, `lodo_stability` |
-| `donor_metrics` | one row per (donor, state): recall, precision, F1, `scored` |
-| `donor_summary` | one row per donor: accuracy, balanced accuracy, abstention rate |
-| `confusion_matrix` | true x predicted states over every held-out cell |
-| `cell_predictions` | per cell: prediction, probability, second best, margin, neighbour support |
+With real data, point `latent_key` at a shared embedding (`"X_scVI"`) and `group_key` /
+`state_key` at your `obs` columns; `study_key` enables leave-one-study-out.
 
 ## Documentation
 
-Full documentation, including the concepts, the validation metrics and the frozen
-reference format, lives at [atlasroute.readthedocs.io](https://atlasroute.readthedocs.io/en/latest/).
+[statetrace.readthedocs.io](https://statetrace.readthedocs.io/en/latest/): concepts, grouped
+validation, transport validation and gating rules, the frozen reference format, API.
 
 ## Development
 
 ```bash
-git clone https://github.com/heart-gen/AtlasRoute.git && cd AtlasRoute
+git clone https://github.com/heart-gen/StateTrace.git && cd StateTrace
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e ".[dev,docs]"
 make lint PY=.venv/bin/python
 make test PY=.venv/bin/python          # add test-slow for the larger synthetic run
 make docs PY=.venv/bin/python
 ```
 
-The benchmark analyses and the manuscript live in separate repositories
-(`AtlasRoute-benchmarking`, `atlasroute-manuscript`).
+Benchmarks (against scPoli, scANVI/scArches, Symphony and scConform, with gated release
+criteria) and the manuscript live in separate repositories (`StateTrace-benchmarking`,
+`statetrace-manuscript`).
 
 ## Citation
 
@@ -105,14 +123,15 @@ See [`CITATION.cff`](CITATION.cff). A preprint will be linked here once availabl
 
 ## Funding
 
-This work is supported by the National Institute on Minority Health and Health
-Disparities (R00 MD016964).
+This work is supported by the National Institute on Minority Health and Health Disparities
+(R00 MD016964).
 
 ## Limitations
 
-- Version 0.1 validates references only; query transport, calibration, novelty detection,
-  abundance and pseudobulk outputs are planned for 0.2.
-- The latent space is fixed across leave-one-donor-out folds (fitted with every donor
-  present), so 0.1 measures classifier transfer within a given embedding: an optimistic
-  bound on embedding transfer. Per-fold refitting is reserved for the scVI backend.
-- The `lodo_stability` categories are descriptive defaults, not biological claims.
+- With the built-in kNN the latent space is fixed across holdout folds (fitted with every donor
+  present), an optimistic bound on embedding transfer; per-fold refitting needs an
+  `AnnDataBackend` (scANVI planned).
+- Shift and novelty diagnostics need the query in the reference latent space; with labels-only
+  predictions from an external tool, gating uses group support and confidence alone.
+- The `reproducibility` and `status` rules are descriptive defaults to be predeclared, not
+  biological claims.

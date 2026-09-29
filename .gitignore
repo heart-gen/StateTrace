@@ -138,12 +138,12 @@ artifacts/**
 !artifacts/reports/
 !artifacts/reports/*.json
 
-# AtlasRoute-specific
+# StateTrace-specific
 .venv/
 docs/_build/
 docs/api/generated/
-*.atlasroute/
-*.atlasroute.zip
+*.statetrace/
+*.statetrace.zip
 .hypothesis/
 .ruff_cache/
 .claude/

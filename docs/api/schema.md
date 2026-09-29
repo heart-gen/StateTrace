@@ -1,7 +1,7 @@
-# `atlasroute.schema`
+# `statetrace.schema`
 
 ```{eval-rst}
-.. automodule:: atlasroute.schema
+.. automodule:: statetrace.schema
    :members:
    :undoc-members:
 ```

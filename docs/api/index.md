@@ -4,6 +4,8 @@
 :maxdepth: 1
 
 reference
+predictions
+transport
 validation
 metrics
 backends

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import tomllib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -12,7 +12,7 @@ if SRC.is_dir():
     sys.path.insert(0, str(SRC))
 
 # Project metadata from pyproject (no package import needed)
-project = "atlasroute"
+project = "statetrace"
 author = "Kynon J Benjamin"
 _meta: dict = {}
 try:
@@ -35,7 +35,7 @@ def _read_version() -> str:
 
 
 release = version = _read_version()
-copyright = f"{datetime.now(timezone.utc).year}, {author}"
+copyright = f"{datetime.now(UTC).year}, {author}"
 
 extensions = [
     "myst_parser",

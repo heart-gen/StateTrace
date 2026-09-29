@@ -1,0 +1,56 @@
+# Transport validation and inference gating
+
+{func}`~statetrace.validate_transport` evaluates a frozen reference against an independent
+query and returns a {class}`~statetrace.TransportRoute`.
+
+## Per cell
+
+`confidence` (from the backend), `margin`, `support` (neighbour vote fraction or mapping
+score), `novelty` (distance to the assigned state's reference centroid in units of that
+state's reference spread; needs the query in the reference latent) and `category`:
+`out_of_reference` when novelty exceeds `ood_z`, else `uncertain` when confidence is below
+`uncertain_below`, else `supported`. Labels the reference does not know are `unknown` and
+`out_of_reference`.
+
+## Per donor x state
+
+`n_cells`, `fraction_of_group`, `median_confidence`, `uncertain_fraction`, `ood_fraction`,
+`observed` (at least `min_cells_per_group` cells) and `recovered` (observed, median confidence
+at least `min_confidence`, out-of-reference fraction at most `max_ood_fraction`).
+
+## Per state
+
+| Column | Meaning |
+|---|---|
+| `ref_groups`, `ref_reproducibility` | donors supporting the state in the reference and its grouped-holdout category (`unvalidated` if no holdout ran) |
+| `groups_observed`, `groups_recovered`, `recovery_rate` | query donors observing and recovering the state |
+| `median_confidence`, `uncertain_fraction`, `ood_fraction` | over the query cells assigned to the state |
+| `shift`, `shift_level` | centroid shift in reference-spread units: low / moderate / high / unknown |
+| `query_recall` | only when query labels are given (benchmarks) |
+| `status` | the gating decision |
+
+## Status rules (evaluated in order)
+
+| Status | Rule (defaults of {class}`~statetrace.TransportConfig`) |
+|---|---|
+| `absent` | fewer than `min_cells_total` (50) query cells or no donor observes it |
+| `insufficient` (reference) | reference reproducibility `fragile` or `insufficient` |
+| `shifted` | `shift_level` high (at least 2 spread units) or `ood_fraction` above `max_ood_fraction` (0.3) |
+| `insufficient` (query) | fewer than `min_groups_recovered` (3) donors recover it |
+| `supported_with_caution` | reference reproducibility `moderate` or `unvalidated`, recovery rate below 0.8, uncertain fraction above 0.2, or moderate shift |
+| `supported` | otherwise |
+
+The rules are descriptive defaults meant to be predeclared in a benchmark and reported with
+the raw columns, not tuned to make a state pass.
+
+## Backend robustness
+
+{func}`~statetrace.compare_backends` takes `{name: Predictions or TransportRoute}` for the
+same cells and reports the all-backend cell agreement, pairwise agreement, per-state
+concordance (cells every backend places in the state over cells any backend places there)
+and, for routes, whether the status agrees.
+
+## Downstream
+
+`route.state_abundance(states="supported")`, `route.pseudobulk(states="supported")` and
+`route.report(output_dir)`.

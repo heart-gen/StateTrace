@@ -8,33 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- `transport()` and `TransportResult`: map an independent query onto a frozen reference.
-- `Calibrator`: isotonic / Platt / quantile calibration from donor holdouts.
-- Novelty statistics and `supported` / `uncertain` / `out_of_reference` categories.
-- `state_abundance()` and `pseudobulk()` donor-level outputs.
-- `TransportReport` results directory.
-- `harmonize_features()` with one-to-one ortholog tables for cross-species transport.
-- scvi-tools backend with per-fold latent refitting.
+- scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
+- Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
+- Plotting and a CLI.
 
 ## [0.1.0] - 2026-09-28
 
+Renamed from AtlasRoute and re-scoped from "donor-aware reference mapping" to a
+backend-independent framework for validating cellular-state transportability and gating
+downstream inference.
+
 ### Added
-- `AtlasReference` / `Reference`: metadata validation, fixed-latent resolution (obsm key
-  or PCA fallback), k-nearest-neighbour backend, `fit()`.
-- Leave-one-donor-out validation (`leave_one_donor_out()`) and the random-split control
-  (`random_split()`), sharing one fold engine.
-- `ValidationResult` with donor x state, per-donor, state-level and confusion tables,
-  a rule-based `lodo_stability` category, `to_obs()`, `to_dir()` / `from_dir()`.
-- `MappingBackend` protocol, `KNNBackend`, backend registry (`get_backend`).
-- Frozen reference format (`*.atlasroute` directory or zip): npy/npz/JSON/CSV only,
-  SHA-256 manifest, `freeze()` / `Reference.load()`.
-- `simulate_reference()` seeded generator for tests and tutorials.
-- `schema` constants for every AnnData key AtlasRoute writes.
-- Stub modules documenting the planned v0.2 API.
+- `StateReference` / `Reference`: metadata validation with group and study support, fixed-latent
+  resolution (obsm key or PCA fallback), kNN baseline, `fit()`, state centroids and spread.
+- Grouped validation: `leave_one_group_out()` (donor), `leave_one_study_out()`, `random_split()`
+  control; `ValidationResult` with group x state, per-group, state-level and confusion tables and
+  the `reproducibility` category; `summarize_holdout()` for held-out tables produced by external tools.
+- `Predictions`: backend-agnostic container with `from_scpoli`, `from_scanvi`, `from_symphony`,
+  `from_azimuth`, `from_celltypist`, `from_obs`, `from_dataframe`, `from_arrays`.
+- `MappingBackend`, `AnnDataBackend`, `CallableBackend` protocols; `KNNBackend`; registry.
+- `validate_transport()` and `TransportRoute`: per-cell categories (supported / uncertain /
+  out_of_reference), per-donor recovery, per-state evidence and transport status
+  (supported / supported_with_caution / shifted / insufficient / absent); `TransportConfig`.
+- Distribution-shift diagnostics: reference-distance z-scores and centroid shift (`novelty`).
+- `compare_backends()` for backend robustness.
+- `state_abundance()`, `pseudobulk()` with status-based gating; `harmonize_features()` with
+  one-to-one ortholog tables; group-aware `calibration_table()` and `IsotonicCalibrator`.
+- Standardised transport report (`route.report()`).
+- Frozen reference format v2 (`*.statetrace`): npy/npz/JSON/CSV only, SHA-256 manifest, group and
+  study keys, state geometry.
+- `simulate_reference()` and `simulate_transport()` with planted stable, shifted, minority, absent
+  and novel states and a truth table.
 
 ### Known limitations
-- `abstain_below` thresholds the top kNN probability only; on a state present in a single donor
-  it recovers about a third of the novel cells at `0.8` while removing a quarter of coverage
-  elsewhere. Reference-distance and local-support novelty statistics arrive in 0.2.
-- The latent space is fixed across folds (fitted with every donor present); LODO in this
-  release measures classifier transfer within a fixed embedding, an optimistic bound.
+- With the built-in kNN the latent is fixed across folds; grouped holdout is an optimistic bound
+  on embedding transfer.
+- Probability-only abstention is a weak novelty detector; the reference-distance category is the
+  intended out-of-reference signal and needs the query in the reference latent.

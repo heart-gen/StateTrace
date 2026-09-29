@@ -8,7 +8,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--run-slow",
         action="store_true",
         default=False,
-        help="Run slow tests (larger synthetic references, minutes of CPU)",
+        help="Run slow tests (larger synthetic references)",
     )
 
 
@@ -21,10 +21,19 @@ def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
             item.add_marker(skip_slow)
 
 
+REF_KW = {
+    "group_key": "donor_id",
+    "state_key": "cell_state",
+    "latent_key": "X_latent",
+    "min_groups_per_state": 2,
+    "min_cells_per_state": 10,
+}
+
+
 @pytest.fixture(scope="session")
 def small_ref():
     """6 donors x 4 states x 100 cells, well separated: fast and easy."""
-    from atlasroute.datasets import simulate_reference
+    from statetrace.datasets import simulate_reference
 
     return simulate_reference(
         n_donors=6,
@@ -37,32 +46,44 @@ def small_ref():
     )
 
 
-@pytest.fixture(scope="session")
-def medium_ref():
-    """8 donors x 5 states x 200 cells with moderate donor structure."""
-    from atlasroute.datasets import simulate_reference
+@pytest.fixture()
+def fitted_small(small_ref):
+    from statetrace import Reference
 
-    return simulate_reference(
-        n_donors=8,
+    return Reference(small_ref.copy(), celltype_key="cell_type", **REF_KW).fit()
+
+
+@pytest.fixture(scope="session")
+def transport_pair():
+    """Reference and query cohorts with planted scenarios: S1 shifted, S3 minority, S4 absent."""
+    from statetrace.datasets import simulate_transport
+
+    return simulate_transport(
+        n_ref_groups=8,
+        n_query_groups=6,
         n_states=5,
-        n_cells_per_donor=200,
-        donor_effect=0.7,
+        n_cells_per_group=150,
+        donor_effect=0.5,
         state_separation=3.0,
-        n_genes=100,
-        seed=1,
+        n_latent=10,
+        n_genes=30,
+        cohort_effect=0.3,
+        shifted_states={"S1": 9.0},
+        absent_states=["S4"],
+        minority_states={"S3": 0.25},
+        seed=5,
     )
 
 
 @pytest.fixture()
-def fitted_small(small_ref):
-    from atlasroute import Reference
+def validated_ref(transport_pair):
+    import warnings
 
-    return Reference(
-        small_ref.copy(),
-        donor_key="donor_id",
-        state_key="cell_state",
-        celltype_key="cell_type",
-        latent_key="X_latent",
-        min_donors_per_state=2,
-        min_cells_per_state=10,
-    ).fit()
+    from statetrace import Reference
+
+    ref_adata, _, _ = transport_pair
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), **REF_KW).fit()
+        ref.leave_one_group_out()
+    return ref

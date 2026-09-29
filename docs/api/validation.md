@@ -1,6 +1,6 @@
-# `atlasroute.validation`
+# `statetrace.validation`
 
 ```{eval-rst}
-.. automodule:: atlasroute.validation
-   :members: StabilityThresholds, LODOConfig, ValidationResult, run_validation, lodo_folds, random_split_folds
+.. automodule:: statetrace.validation
+   :members: StabilityThresholds, LODOConfig, ValidationResult, summarize_holdout, run_validation, logo_folds, random_split_folds
 ```

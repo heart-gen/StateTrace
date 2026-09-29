@@ -1,6 +1,6 @@
-# `atlasroute.reference`
+# `statetrace.reference`
 
 ```{eval-rst}
-.. automodule:: atlasroute.reference
-   :members: AtlasReference
+.. automodule:: statetrace.reference
+   :members: StateReference
 ```

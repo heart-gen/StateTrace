@@ -1,52 +1,61 @@
 # Quickstart
 
-The whole v0.1 workflow on a simulated reference. Every call is deterministic given the seed.
+Everything below runs on simulated cohorts and is deterministic given the seed.
 
 ```python
-import atlasroute as ar
-from atlasroute.datasets import simulate_reference
+import statetrace as st
+from statetrace.datasets import simulate_transport
 
-adata = simulate_reference(n_donors=8, n_states=5, n_cells_per_donor=200, donor_effect=0.7, seed=1)
-
-ref = ar.Reference(adata, donor_key="donor_id", state_key="cell_state", latent_key="X_latent").fit()
+ref_adata, query_adata, truth = simulate_transport(
+    n_ref_groups=8, n_query_groups=6, n_states=5, n_latent=10,
+    shifted_states={"S1": 9.0}, absent_states=["S4"], minority_states={"S3": 0.25}, seed=5,
+)
 ```
 
-`fit()` validates the metadata (donor and state columns become categorical; states with
-few donors or cells are flagged), takes the latent coordinates from `obsm["X_latent"]`
-(or computes a PCA when `latent_key=None`) and fits the k-nearest-neighbour backend.
-
-## Leave-one-donor-out
+## 1. Build and validate the reference by donor
 
 ```python
-res = ref.leave_one_donor_out()
+ref = st.Reference(ref_adata, group_key="donor_id", state_key="cell_state", latent_key="X_latent").fit()
+res = ref.leave_one_group_out()          # one fold per donor
 print(res.summary())
-res.state_metrics[["n_donors_reference", "median_donor_recall", "min_donor_recall", "lodo_stability"]]
+res.state_metrics[["n_groups_reference", "median_group_recall", "group_recovery_rate", "reproducibility"]]
+ctrl = ref.random_split(n_splits=5)      # the conventional, optimistic control
 ```
 
-`res.donor_metrics` is the long donor x state table, `res.donor_summary` has one row per
-donor, `res.confusion_matrix` pools every held-out cell and `res.cell_predictions` keeps
-the per-cell probability, margin and neighbour support.
+`leave_one_study_out()` does the same over a `study_key`. To validate an external mapper
+instead of the built-in kNN, wrap it in {class}`~statetrace.CallableBackend` or run it in your
+own leave-one-donor-out loop and summarise the held-out table with
+{func}`~statetrace.summarize_holdout`.
 
-## The optimistic control
+## 2. Freeze
 
 ```python
-ctrl = ref.random_split(n_splits=5)
-ctrl.overall["accuracy"], res.overall["accuracy"]
+path = ref.freeze("my_reference.statetrace")
+ref = st.Reference.load(path).fit()
 ```
 
-A stratified split over cells ignores donor membership and is the conventional benchmark.
-The gap between the two accuracies is the donor effect the reference must survive.
-
-## Freeze and reload
+## 3. Validate transport into an independent cohort
 
 ```python
-path = ref.freeze("nvu_reference.atlasroute")       # a directory; use "....zip" for an archive
-ref2 = ar.Reference.load(path).fit()                 # rebuilds the backend from the stored latent
-ref2.state_table()
+route = st.validate_transport(ref, query_adata, group_key="donor_id")
+print(route.summary())
+route.states[["ref_reproducibility", "groups_recovered", "query_groups", "shift_level", "ood_fraction", "status"]]
 ```
 
-## Write predictions back to the AnnData
+With predictions from another tool:
 
 ```python
-res.to_obs(adata)          # adds atlasroute_lodo_state, _probability, _margin, _abstained
+preds = st.Predictions.from_scpoli(query_adata)                 # or from_scanvi / from_symphony / from_celltypist / from_obs
+route_scpoli = st.validate_transport(ref, query_adata, group_key="donor_id", predictions=preds)
+st.compare_backends({"knn": route, "scpoli": route_scpoli}).summary()
+```
+
+## 4. Gate downstream inference
+
+```python
+route.supported_states
+abundance = route.state_abundance(states="supported")          # donor x state
+pb = route.pseudobulk(states="supported")                      # donor x state pseudobulk AnnData
+route.report("results/statetrace_report")                      # tables + report.md
+route.to_obs()                                                 # writes statetrace_* columns into query.obs
 ```

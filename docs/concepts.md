@@ -2,37 +2,51 @@
 
 ## Donors, not cells, are the replication unit
 
-Thousands of cells from two donors are two observations of a state, not thousands.
-AtlasRoute reports, for every state, how many donors support it, how well each held-out
-donor is recovered, and how variable that recovery is. Cell-level accuracy and
-donor-level reproducibility are always separate numbers.
+Thousands of cells from two donors are two observations of a state, not thousands. Every
+StateTrace metric exists at the level of a *group* (donor by default; individual, study, site
+or cohort through `group_key` and `study_key`). Cell-level accuracy is reported alongside,
+never instead.
 
-## Mapping and validation are separate operations
+## StateTrace consumes mapping; it does not perform it
 
-AtlasRoute does not implement an integration or classification algorithm. Backends
-(currently a k-nearest-neighbour classifier in a fixed latent space; scVI/scANVI planned)
-sit behind the {class}`~atlasroute.backends.base.MappingBackend` protocol. The
-contribution is the validation, calibration, abstention and reporting layer around them,
-so the same donor-level diagnostics apply whichever engine is used.
+Any tool's output becomes a {class}`~statetrace.Predictions` object (labels, optional
+probabilities, the tool's native confidence or uncertainty). Grouped validation, transport
+validation and backend comparison all work on that object, so the conclusions do not depend on
+which mapper you prefer. A built-in kNN backend exists so the workflow runs without any
+external tool, and the {class}`~statetrace.AnnDataBackend` protocol lets an external mapper be
+refitted inside every holdout fold.
+
+## Seven questions, one route
+
+1. **Grouped validation**: leave-one-donor-out and leave-one-study-out holdouts.
+2. **State reproducibility**: does a state survive removal of donors rather than cells
+   (`reproducibility` = stable / moderate / fragile / insufficient)?
+3. **Cross-cohort transportability**: does a frozen state definition recover in the donors of
+   an independent cohort?
+4. **Backend robustness**: do scPoli, scANVI, Symphony and the kNN baseline reach the same
+   conclusion ({func}`~statetrace.compare_backends`)?
+5. **Distribution-shift diagnostics**: absent, novel, or a shifted version of an existing state
+   (reference-distance z-scores and centroid shift in the shared latent).
+6. **Inference gating**: `supported`, `supported_with_caution`, `shifted`, `insufficient` or
+   `absent` per state; `route.pseudobulk(states="supported")` and
+   `route.state_abundance(states="supported")` carry only gated states downstream.
+7. **Transport report**: standardised evidence per state that can accompany a publication.
 
 ## Abstention is a result
 
-A query cell may lie outside the reference, be equidistant from two states, or be
-technically shifted. Forcing it into the nearest state hides that. `unknown` is a valid
-assignment; in v0.1 the `abstain_below` option of {class}`~atlasroute.LODOConfig`
-exercises this on held-out donors, and v0.2 makes it data-driven for queries.
+`unknown` and `out_of_reference` are valid outcomes. Forcing every query cell into the nearest
+state hides novelty and technical shift; StateTrace reports the fraction of uncertain and
+out-of-reference cells per state and per donor and uses it in gating.
 
 ## Freeze before you look at the query
 
-{meth}`~atlasroute.AtlasReference.freeze` writes an immutable, checksummed bundle of the
-latent coordinates, labels, donor statistics, backend configuration and validation
-tables. A query is mapped against that bundle; it never redefines the reference unless
-you deliberately build a new one. See {doc}`reference-format`.
+{meth}`~statetrace.StateReference.freeze` writes an immutable, checksummed bundle of latent
+coordinates, labels, group statistics, state geometry and validation tables. A query is
+evaluated against that bundle and never redefines it.
 
-## Three questions, kept apart
+## What StateTrace is not
 
-1. **Reference stability**: is a state reproducibly identifiable across donors of the
-   reference? (v0.1: {meth}`~atlasroute.AtlasReference.leave_one_donor_out`)
-2. **Transportability**: can the state be recovered in an independent query? (v0.2)
-3. **Inference readiness**: is the transported state supported well enough for
-   donor-level differential, compositional or genetic analyses? (v0.2 report)
+Not an integration method, not a classifier competing with scPoli or scANVI, not a
+differential-expression method, and not a conformal calibrator (scConform and conformal
+annotation already provide cell-level coverage guarantees). Its calibration question is
+group-aware: does a backend's confidence predict recovery in an unseen donor?

@@ -1,4 +1,4 @@
-from atlasroute import schema
+from statetrace import schema
 
 
 def test_keys_are_unique_and_prefixed():
@@ -6,11 +6,11 @@ def test_keys_are_unique_and_prefixed():
     values = [getattr(schema, n) for n in names]
     assert len(set(values)) == len(values)
     for v in values:
-        assert v.startswith("atlasroute") or v.startswith("X_atlasroute"), v
+        assert v.startswith("statetrace") or v.startswith("X_statetrace"), v
 
 
-def test_constants():
-    assert len(schema.STABILITY_CATEGORIES) == 4
-    assert isinstance(schema.FORMAT_VERSION, int)
-    assert schema.UNKNOWN_LABEL == "unknown"
-    assert "leave_one_donor_out" in schema.VALIDATION_METHODS
+def test_vocabularies():
+    assert schema.STABILITY_CATEGORIES == ("stable", "moderate", "fragile", "insufficient")
+    assert "supported_with_caution" in schema.TRANSPORT_STATUS
+    assert schema.CELL_CATEGORIES == ("supported", "uncertain", "out_of_reference")
+    assert schema.FORMAT_VERSION == 2 and schema.FROZEN_SUFFIX == ".statetrace"

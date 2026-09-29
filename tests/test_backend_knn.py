@@ -3,9 +3,9 @@ import json
 import numpy as np
 import pytest
 
-from atlasroute.backends import BACKENDS, get_backend
-from atlasroute.backends.base import MappingBackend, SupportsNeighborSupport
-from atlasroute.backends.knn import KNNBackend
+from statetrace.backends import BACKENDS, get_backend
+from statetrace.backends.base import AnnDataBackend, MappingBackend, SupportsNeighborSupport
+from statetrace.backends.knn import KNNBackend
 
 
 @pytest.fixture()
@@ -19,15 +19,14 @@ def toy():
 
 def test_protocol_conformance():
     b = KNNBackend()
-    assert isinstance(b, MappingBackend)
-    assert isinstance(b, SupportsNeighborSupport)
+    assert isinstance(b, MappingBackend) and isinstance(b, SupportsNeighborSupport)
+    assert not isinstance(b, AnnDataBackend)
     assert b.name == "knn"
 
 
 def test_registry():
-    assert "knn" in BACKENDS
-    b = get_backend("knn", n_neighbors=7)
-    assert isinstance(b, KNNBackend) and b.n_neighbors == 7
+    assert set(BACKENDS) >= {"knn", "scanvi"}
+    assert get_backend("knn", n_neighbors=7).n_neighbors == 7
     with pytest.raises(ValueError, match="Unknown backend"):
         get_backend("nope")
 
@@ -44,11 +43,8 @@ def test_predict_proba_rows_sum_to_one_and_align(toy):
 
 def test_neighbor_votes_sum_to_k(toy):
     X, y = toy
-    b = KNNBackend(n_neighbors=9).fit(X, y)
-    V = b.neighbor_votes(X)
-    assert V.shape == (120, 3)
-    assert (V.sum(axis=1) == 9).all()
-    assert V.dtype.kind == "i"
+    V = KNNBackend(n_neighbors=9).fit(X, y).neighbor_votes(X)
+    assert V.shape == (120, 3) and (V.sum(axis=1) == 9).all() and V.dtype.kind == "i"
 
 
 def test_cosine_matches_brute_force_ranking(toy):
@@ -57,9 +53,9 @@ def test_cosine_matches_brute_force_ranking(toy):
     Xn = X / np.linalg.norm(X, axis=1, keepdims=True)
     cos = Xn @ Xn.T
     for i in range(5):
-        expected = set(np.argsort(-cos[i])[:3])
-        got = set(b._model.kneighbors(b._prep(X[i : i + 1]), return_distance=False)[0])
-        assert got == expected
+        assert set(b._model.kneighbors(b._prep(X[i : i + 1]), return_distance=False)[0]) == set(
+            np.argsort(-cos[i])[:3]
+        )
 
 
 def test_clone_and_params_json(toy):
@@ -72,13 +68,9 @@ def test_clone_and_params_json(toy):
     json.dumps(b.get_params())
 
 
-def test_k_capped_to_training_size(toy):
+def test_k_capped_and_bad_params(toy):
     X, y = toy
-    b = KNNBackend(n_neighbors=500).fit(X[:10], y[:10])
-    assert b.predict_proba(X[:3]).shape == (3, 1)
-
-
-def test_bad_params():
+    assert KNNBackend(n_neighbors=500).fit(X[:10], y[:10]).predict_proba(X[:3]).shape == (3, 1)
     with pytest.raises(ValueError):
         KNNBackend(metric="manhattan")
     with pytest.raises(ValueError):

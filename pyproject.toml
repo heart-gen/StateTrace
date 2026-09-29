@@ -1,5 +1,5 @@
 [project]
-name = "atlasroute"
+name = "statetrace"
 version = "0.1.0"
 description = "Donor-aware framework for building, freezing, validating and transporting cellular-state references across single-cell datasets."
 readme = "README.md"
@@ -54,17 +54,17 @@ scvi = [
     "scvi-tools>=1.2,<2",
 ]
 all = [
-    "atlasroute[dev,docs,scvi]",
+    "statetrace[dev,docs,scvi]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/heart-gen/AtlasRoute"
-Repository = "https://github.com/heart-gen/AtlasRoute"
-Documentation = "https://atlasroute.readthedocs.io/en/latest/"
-"Bug Tracker" = "https://github.com/heart-gen/AtlasRoute/issues"
+Homepage = "https://github.com/heart-gen/StateTrace"
+Repository = "https://github.com/heart-gen/StateTrace"
+Documentation = "https://statetrace.readthedocs.io/en/latest/"
+"Bug Tracker" = "https://github.com/heart-gen/StateTrace/issues"
 
 [tool.poetry]
-packages = [{ include = "atlasroute", from = "src" }]
+packages = [{ include = "statetrace", from = "src" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

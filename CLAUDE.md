@@ -1,10 +1,17 @@
-# AtlasRoute: working rules for this repository
+# StateTrace: working rules for this repository
 
-## What AtlasRoute is (and is not)
+## What StateTrace is (and is not)
 
-- A **validation, calibration, abstention and reporting layer** around cell-state mapping.
-  It is not an integration algorithm and not a differential-expression method; mapping
-  engines are backends behind `atlasroute.backends.base.MappingBackend`.
+- A **backend-independent framework for donor- and cohort-aware validation of cellular-state
+  transportability and downstream inference.** StateTrace does not map cells: it consumes the
+  output of scPoli, scANVI/scArches, Symphony, Azimuth, CellTypist or a user classifier through
+  `statetrace.predictions.Predictions` (or refits them per fold through `AnnDataBackend`) and
+  answers whether a state is reproducible across donors, transports into an independent cohort,
+  is robust to the backend, is shifted or out of reference, and is **supported** for inference.
+- Its unique modules: grouped validation, state reproducibility, cross-cohort transportability,
+  backend robustness, distribution-shift diagnostics, inference gating, transport report.
+- It does not compete with mappers on cell-level accuracy and does not re-implement conformal
+  calibration (scConform); its calibration question is group-aware.
 - **Donors, not cells, are the replication unit.** Every metric that reaches a user must
   exist at donor level; cell-level accuracy is reported separately, never as a proxy.
 - **Freeze before query.** A reference is written once (`freeze()`), checksummed, and never
@@ -16,12 +23,12 @@
 
 ## House style (matches ../IsoGraph and ../rfmix_reader)
 
-- `src/atlasroute/` layout; PEP 621 `[project]` metadata with the poetry-core backend;
+- `src/statetrace/` layout; PEP 621 `[project]` metadata with the poetry-core backend;
   version lives only in `pyproject.toml` and is read through `importlib.metadata`.
 - Every dependency has a floor and a major cap. `torch` and `scvi-tools` are never hard
-  dependencies; optional features raise `ImportError("... pip install 'atlasroute[extra]'")`.
+  dependencies; optional features raise `ImportError("... pip install 'statetrace[extra]'")`.
 - `__init__.py` exports lazily (`_lazy` dict + `__getattr__` + `TYPE_CHECKING` block);
-  `import atlasroute` must not import scanpy, matplotlib, sklearn or torch.
+  `import statetrace` must not import scanpy, matplotlib, sklearn or torch.
 - `from __future__ import annotations`; `X | None` and `list[str]` typing; NumPy-style
   docstrings on every public object; keyword-only arguments on public entry points.
 - `logger = logging.getLogger(__name__)`; no `print`. `warnings.warn(..., stacklevel=2)`
@@ -30,7 +37,8 @@
 - ruff: line length 100, rules `E F I B UP N C4`, ignore `N803 N806 E501`.
 - Tests: pytest + hypothesis; `slow` marker behind `--run-slow`; `tests/test_imports.py`
   runs import hygiene in a subprocess (silent import, works with torch and scvi blocked).
-- Synthetic data comes from `atlasroute.datasets.simulate_reference`; no downloads in tests.
+- Synthetic data comes from `statetrace.datasets.simulate_reference` / `simulate_transport`; no downloads in tests.
+- Every vocabulary (reproducibility, cell category, transport status) lives in `schema.py`.
 
 ## Commands
 
@@ -45,14 +53,15 @@ make docs PY=.venv/bin/python
 ## Do not
 
 - Put benchmark analyses, notebooks with real data or manuscript material here; they belong
-  in `../../projects/AtlasRoute-benchmarking/` and `../../manuscripts/atlasroute-manuscript/`.
-- Refit the latent space per fold in v0.1 (`refit_latent=True` is reserved for the scVI backend).
+  in `../../projects/StateTrace-benchmarking/` and `../../manuscripts/statetrace-manuscript/`.
+- Refit the latent space per fold with the built-in kNN (`refit_latent=True` is reserved for AnnData backends).
+- Add a new mapping or integration method; add adapters instead.
 - Pickle anything in the frozen reference format.
 - Add a CLI, create GitHub remotes, or bump the version outside `make release`.
 - Add trailer lines (Co-Authored-By or similar) to commit messages. Subject plus optional body only.
 
 ## Related repositories
 
-- Benchmark and application analyses: `/home/kynon/Documents/github/projects/AtlasRoute-benchmarking/`
-- Manuscript (Manubot, Genome Biology): `/home/kynon/Documents/github/manuscripts/atlasroute-manuscript/`
+- Benchmark and application analyses (comparators scPoli, scANVI/scArches, Symphony, scConform; gated layers): `/home/kynon/Documents/github/projects/StateTrace-benchmarking/`
+- Manuscript (Manubot, Genome Biology): `/home/kynon/Documents/github/manuscripts/statetrace-manuscript/`
 - First application, the NVU reference: `/home/kynon/Documents/github/projects/nvu-neuroimmune-reference/`

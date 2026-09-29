@@ -1,4 +1,4 @@
-name: atlasroute
+name: statetrace
 channels:
   - conda-forge
 dependencies:
@@ -13,5 +13,5 @@ dependencies:
   - matplotlib
   - pip:
       # scvi-tools (and therefore torch) is intentionally not installed here; install
-      # `atlasroute[scvi]` with a torch build that matches the local CPU/GPU stack.
+      # `statetrace[scvi]` with a torch build that matches the local CPU/GPU stack.
       - -e .[dev]

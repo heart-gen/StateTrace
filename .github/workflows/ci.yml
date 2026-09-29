@@ -42,7 +42,7 @@ jobs:
       - name: Run fast tests with coverage (no scvi-tools or torch required)
         run: >-
           pytest -m "not slow"
-          --cov=atlasroute --cov-report=term-missing --cov-report=xml
+          --cov=statetrace --cov-report=term-missing --cov-report=xml
       - name: Upload coverage report
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4

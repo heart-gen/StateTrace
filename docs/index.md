@@ -1,16 +1,18 @@
-# AtlasRoute
+# StateTrace
 
-**Donor-aware building, freezing, validation and transport of cellular-state references
-across single-cell and single-nucleus datasets.**
+**A backend-independent framework for donor- and cohort-aware validation of cellular-state
+transportability and downstream inference.**
 
-AtlasRoute answers one question: *we discovered this cell state in dataset A; can we
-legitimately carry it into dataset B?* It treats donors, not cells, as the replication
-unit; separates mapping from validation; allows a reference to abstain (`unknown`); and
-freezes a reference before any query is examined.
+StateTrace does not map cells. Mapping tools (scPoli, scANVI/scArches, Symphony, Azimuth,
+CellTypist, a user classifier, or StateTrace's own kNN baseline) answer *which state is this
+cell?* StateTrace answers a different question: **is a cellular state defined in one human
+cohort reproducible and transportable enough to support inference in another?**
 
-Version 0.1 delivers the methodological core: leave-one-donor-out validation of a
-labelled reference in a fixed latent space, donor x state metrics, and a frozen
-reference format. Query transport, calibration and novelty detection follow in 0.2.
+For every state it asks, in order: is it reproducible across the reference's donors, or does
+it depend on particular donors? Does it recover in unseen donors, and in an independent
+cohort? Is the conclusion the same across mapping backends? Is the query version shifted,
+uncertain or partly out of reference? Only then is the state **supported** for group-level
+differential abundance, pseudobulk expression or genetic analyses.
 
 ```{toctree}
 :maxdepth: 2
@@ -26,6 +28,7 @@ concepts
 :caption: Guides
 
 validation
+transport
 reference-format
 roadmap
 ```

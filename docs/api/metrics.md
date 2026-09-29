@@ -1,6 +1,6 @@
-# `atlasroute.metrics`
+# `statetrace.metrics`
 
 ```{eval-rst}
-.. automodule:: atlasroute.metrics
+.. automodule:: statetrace.metrics
    :members:
 ```

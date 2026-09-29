@@ -1,21 +1,21 @@
 """
-The frozen reference format (``*.atlasroute``).
+The frozen reference format (``*.statetrace``).
 
-A frozen reference is a directory (or a zip archive of the same layout) holding the
-latent coordinates, labels, categories, state table, provenance manifest and, when
-validation ran, the validation tables. Nothing is pickled: arrays are ``.npy``/``.npz``
-(read with ``allow_pickle=False``), tables are CSV and metadata is JSON, so a reference
-frozen today can be read by a future release and inspected without AtlasRoute.
+A directory (or zip of the same layout) holding the latent coordinates, labels, categories,
+state geometry, state table, provenance manifest and, when validation ran, the validation
+tables. Nothing is pickled: arrays are ``.npy``/``.npz`` (read with ``allow_pickle=False``),
+tables CSV, metadata JSON.
 
 Layout::
 
-    name.atlasroute/
-        manifest.json     format_version, versions, keys, provenance, backend, counts, file checksums
+    name.statetrace/
+        manifest.json     format_version, versions, keys, provenance, backend, counts, checksums
         latent.npy        float32 (n_cells, n_dims)
-        cells.npz         obs_names, state_code, donor_code, celltype_code (-1 when absent)
+        cells.npz         obs_names, state_code, group_code, study_code, celltype_code (-1 when absent)
         categories.json   code -> label lists
-        centroids.npy     float32 (n_states, n_dims) state means in latent space
-        state_table.csv   donor support per state
+        centroids.npy     float32 (n_states, n_dims) state means
+        spread.npy        float32 (n_states,) RMS radius per state
+        state_table.csv   group support per state
         validation/       ValidationResult.to_dir() output (optional)
 """
 
@@ -40,7 +40,7 @@ import pandas as pd
 from . import schema
 
 if TYPE_CHECKING:
-    from .reference import AtlasReference
+    from .reference import StateReference
     from .validation import ValidationResult
 
 
@@ -56,12 +56,15 @@ class FrozenBundle:
     latent: np.ndarray
     obs_names: np.ndarray
     state_codes: np.ndarray
-    donor_codes: np.ndarray
+    group_codes: np.ndarray
+    study_codes: np.ndarray
     celltype_codes: np.ndarray
     states: list[str]
-    donors: list[str]
+    groups: list[str]
+    studies: list[str] | None
     celltypes: list[str] | None
     centroids: np.ndarray
+    spread: np.ndarray
     state_table: pd.DataFrame
     validation: ValidationResult | None
 
@@ -86,22 +89,23 @@ def _library_versions() -> dict[str, str]:
     return out
 
 
+def _codes_or_missing(codes: np.ndarray | None, n: int) -> np.ndarray:
+    return (
+        np.asarray(codes, dtype=np.int32) if codes is not None else np.full(n, -1, dtype=np.int32)
+    )
+
+
 def write_frozen(
-    reference: AtlasReference,
+    reference: StateReference,
     path: str | Path,
     *,
     overwrite: bool = False,
     include_cell_predictions: bool = True,
 ) -> Path:
-    """
-    Serialise a fitted :class:`AtlasReference` to ``path``.
-
-    ``path`` ending in ``.zip`` produces an archive; otherwise a directory. The
-    ``.atlasroute`` suffix is added when missing.
-    """
+    """Serialise a fitted :class:`~statetrace.reference.StateReference` to ``path`` (directory, or zip when the path ends in ``.zip``)."""
     from . import __version__
 
-    if not reference.is_fitted:
+    if reference.latent_ is None:
         raise RuntimeError("call fit() before freeze()")
     path = Path(path)
     as_zip = path.suffix == ".zip"
@@ -112,12 +116,10 @@ def write_frozen(
     if target.exists():
         if not overwrite:
             raise FileExistsError(f"{target} exists; pass overwrite=True to replace it")
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
+        shutil.rmtree(target) if target.is_dir() else target.unlink()
 
-    tmp_root = Path(tempfile.mkdtemp(prefix="atlasroute-freeze-"))
+    n = len(reference.obs_names_)
+    tmp_root = Path(tempfile.mkdtemp(prefix="statetrace-freeze-"))
     out = tmp_root / stem
     out.mkdir()
     try:
@@ -126,56 +128,65 @@ def write_frozen(
             out / "cells.npz",
             obs_names=np.asarray(reference.obs_names_).astype(str),
             state_code=np.asarray(reference.state_codes_, dtype=np.int32),
-            donor_code=np.asarray(reference.donor_codes_, dtype=np.int32),
-            celltype_code=(
-                np.asarray(reference.celltype_codes_, dtype=np.int32)
-                if reference.celltype_codes_ is not None
-                else np.full(len(reference.obs_names_), -1, dtype=np.int32)
-            ),
+            group_code=np.asarray(reference.group_codes_, dtype=np.int32),
+            study_code=_codes_or_missing(reference.study_codes_, n),
+            celltype_code=_codes_or_missing(reference.celltype_codes_, n),
         )
         (out / "categories.json").write_text(
             json.dumps(
                 {
                     "states": [str(s) for s in reference.states_],
-                    "donors": [str(d) for d in reference.donors_],
-                    "celltypes": (
-                        [str(c) for c in reference.celltypes_]
-                        if reference.celltypes_ is not None
-                        else None
-                    ),
+                    "groups": [str(g) for g in reference.groups_],
+                    "studies": [str(s) for s in reference.studies_]
+                    if reference.studies_ is not None
+                    else None,
+                    "celltypes": [str(c) for c in reference.celltypes_]
+                    if reference.celltypes_ is not None
+                    else None,
                 },
                 indent=2,
             )
         )
         np.save(out / "centroids.npy", reference.centroids_.astype(np.float32))
+        np.save(out / "spread.npy", reference.spread_.astype(np.float32))
         reference.metadata_.state_table.to_csv(out / "state_table.csv")
         if reference.validation_ is not None:
             reference.validation_.to_dir(
                 out / "validation", include_cell_predictions=include_cell_predictions
             )
         files = {str(p.relative_to(out)): _sha256(p) for p in sorted(out.rglob("*")) if p.is_file()}
+        backend_name = (
+            getattr(reference.backend_, "name", "external")
+            if reference.backend_ is not None
+            else "knn"
+        )
+        backend_params = reference.backend_.get_params() if reference.backend_ is not None else {}
         manifest = {
             "format_version": schema.FORMAT_VERSION,
-            "atlasroute_version": __version__,
+            "statetrace_version": __version__,
             "created": datetime.now(UTC).isoformat(timespec="seconds"),
             "reference_id": reference.reference_id_ or str(uuid.uuid4()),
             "libraries": _library_versions(),
             "keys": {
-                "donor": reference.donor_key,
+                "group": reference.group_key,
                 "state": reference.state_key,
                 "celltype": reference.celltype_key,
+                "study": reference.study_key,
                 "latent": reference.latent_key,
             },
             "latent": reference.latent_provenance_,
-            "backend": {"name": reference.backend_.name, "params": reference.backend_.get_params()},
+            "backend": {"name": backend_name, "params": backend_params},
             "counts": {
-                "n_cells": int(reference.latent_.shape[0]),
-                "n_donors": int(len(reference.donors_)),
+                "n_cells": int(n),
+                "n_groups": int(len(reference.groups_)),
                 "n_states": int(len(reference.states_)),
+                "n_studies": int(len(reference.studies_))
+                if reference.studies_ is not None
+                else None,
                 "n_dims": int(reference.latent_.shape[1]),
             },
             "thresholds": {
-                "min_donors_per_state": reference.min_donors_per_state,
+                "min_groups_per_state": reference.min_groups_per_state,
                 "min_cells_per_state": reference.min_cells_per_state,
             },
             "validated": reference.validation_ is not None,
@@ -206,8 +217,7 @@ class _Source:
             return
         if zipfile.is_zipfile(path):
             self.zf = zipfile.ZipFile(path)
-            names = self.zf.namelist()
-            manifests = [n for n in names if n.endswith(schema.MANIFEST_FILE)]
+            manifests = [n for n in self.zf.namelist() if n.endswith(schema.MANIFEST_FILE)]
             if not manifests:
                 raise FrozenReferenceError(f"{path}: no {schema.MANIFEST_FILE} in archive")
             self.prefix = manifests[0][: -len(schema.MANIFEST_FILE)]
@@ -246,16 +256,7 @@ class _Source:
 
 
 def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
-    """
-    Read a frozen reference directory or archive into memory.
-
-    Parameters
-    ----------
-    path
-        Directory or ``.zip`` written by :func:`write_frozen`.
-    verify
-        Recompute the SHA-256 of every listed file and fail on any mismatch.
-    """
+    """Read a frozen reference directory or archive, verifying the format version and every checksum."""
     from .validation import ValidationResult
 
     path = Path(path)
@@ -267,25 +268,28 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
         fv = int(manifest.get("format_version", 0))
         if fv > schema.FORMAT_VERSION:
             raise FrozenReferenceError(
-                f"{path}: format_version {fv} is newer than this AtlasRoute supports ({schema.FORMAT_VERSION})"
+                f"{path}: format_version {fv} is newer than this StateTrace supports ({schema.FORMAT_VERSION})"
+            )
+        if fv < schema.FORMAT_VERSION:
+            raise FrozenReferenceError(
+                f"{path}: format_version {fv} predates the group/study layout; re-freeze the reference"
             )
         if verify:
             for name, digest in manifest.get("files", {}).items():
-                got = hashlib.sha256(src.read(name)).hexdigest()
-                if got != digest:
+                if hashlib.sha256(src.read(name)).hexdigest() != digest:
                     raise FrozenReferenceError(f"{path}: checksum mismatch for {name}")
         latent = np.load(_io.BytesIO(src.read("latent.npy")), allow_pickle=False)
         cells = np.load(_io.BytesIO(src.read("cells.npz")), allow_pickle=False)
         cats = json.loads(src.read("categories.json").decode())
         centroids = np.load(_io.BytesIO(src.read("centroids.npy")), allow_pickle=False)
+        spread = np.load(_io.BytesIO(src.read("spread.npy")), allow_pickle=False)
         state_table = pd.read_csv(_io.BytesIO(src.read("state_table.csv")), index_col="state")
         state_table.index = state_table.index.astype(str)
         validation = None
         if src.exists("validation/config.json"):
-            tmp = Path(tempfile.mkdtemp(prefix="atlasroute-read-"))
+            tmp = Path(tempfile.mkdtemp(prefix="statetrace-read-"))
             try:
-                vdir = src.extract_dir("validation", tmp)
-                validation = ValidationResult.from_dir(vdir)
+                validation = ValidationResult.from_dir(src.extract_dir("validation", tmp))
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
         return FrozenBundle(
@@ -293,12 +297,15 @@ def read_frozen(path: str | Path, *, verify: bool = True) -> FrozenBundle:
             latent=np.asarray(latent, dtype=np.float32),
             obs_names=np.asarray(cells["obs_names"]).astype(str),
             state_codes=np.asarray(cells["state_code"], dtype=np.int32),
-            donor_codes=np.asarray(cells["donor_code"], dtype=np.int32),
+            group_codes=np.asarray(cells["group_code"], dtype=np.int32),
+            study_codes=np.asarray(cells["study_code"], dtype=np.int32),
             celltype_codes=np.asarray(cells["celltype_code"], dtype=np.int32),
             states=[str(s) for s in cats["states"]],
-            donors=[str(d) for d in cats["donors"]],
+            groups=[str(g) for g in cats["groups"]],
+            studies=[str(s) for s in cats["studies"]] if cats.get("studies") else None,
             celltypes=[str(c) for c in cats["celltypes"]] if cats.get("celltypes") else None,
             centroids=np.asarray(centroids, dtype=np.float32),
+            spread=np.asarray(spread, dtype=np.float32),
             state_table=state_table,
             validation=validation,
         )
