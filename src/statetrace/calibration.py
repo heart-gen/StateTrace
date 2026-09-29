@@ -59,7 +59,7 @@ def calibration_table(
 
 
 def expected_calibration_error(table: pd.DataFrame, *, column: str = "cell_accuracy") -> float:
-    """Weighted mean |confidence - accuracy| over bins (cells or group-states as weights)."""
+    """Weighted mean absolute difference between confidence and accuracy over bins (cells or group-states as weights)."""
     w = table["n_cells"] if column == "cell_accuracy" else table["n_group_states"]
     t = table.dropna(subset=[column, "mean_confidence"])
     w = w.reindex(t.index).fillna(0)
