@@ -1,5 +1,7 @@
 # Roadmap
 
+Stage-by-stage tracking, schedule and milestone log: {doc}`staged-roadmap`.
+
 Releases are gated by the benchmark repository: StateTrace advances to the next layer only when
 it is comparable to or better than the main comparators on the previous layer's task.
 
