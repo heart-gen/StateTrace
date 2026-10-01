@@ -119,8 +119,8 @@ data with a shift diagnostic that does not depend on the mapper's latent.
 - [x] Novelty decision rule from the withheld-state curve (`ood_rule`; curve in `simulation.withheld_state`; centroid q95 predeclared 2026-09-30)
 - [x] kNN novelty score, support calibration, joint score, calibrated population call (`ood_score`, `support_calibration`, `population_calibration`)
 - [x] Labels-only predictions path (`confidence_source`)
-- [ ] Full grid on Bridges-2 (`01_simulation/_h/02c.comparators.sh`, about 20 GPU-hours)
-- [ ] `00_gates/_m/G0.md`; tag v0.1.0
+- [ ] Full grid: 450 comparator cells plus the withheld-state curve with the mappers, running on the local TITAN RTX since 2026-09-30 21:07 (`01_simulation/_h/local_grid.sh`, 3 workers, resumable); Bridges-2 (`run_stage.sh`) is the fallback, not a prerequisite
+- [ ] `00_gates/_m/G0.md` (written by `gates.evaluate` at the end of the local run); tag v0.1.0 at the SHA that passed; build the wheel Bridges-2 installs from
 
 ### Commands
 
