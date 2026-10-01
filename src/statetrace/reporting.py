@@ -103,6 +103,11 @@ def write_report(
             if route.reference.get("latent_available")
             else " (no query latent: per-cell distance unavailable)"
         )
+        + (
+            f". Local reference support: {route.reference.get('support', {}).get('source')}; "
+            f"confidence source: {route.reference.get('confidence_source')}; "
+            f"out-of-reference rule: {route.reference.get('ood_rule')}"
+        )
         + ". State shift comes from the frozen expression space"
         + (
             f" ({expr.get('n_genes_scored')} genes, feature retention "

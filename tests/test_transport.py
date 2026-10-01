@@ -194,6 +194,136 @@ def test_status_rule_table():
     assert transport_status({**base, "recovery_rate": 0.5}, cfg) == "supported_with_caution"
     assert transport_status({**base, "uncertain_fraction": 0.3}, cfg) == "supported_with_caution"
     assert transport_status({**base, "shift_level": "moderate"}, cfg) == "supported_with_caution"
+    # a tool with neither confidence nor a latent cannot earn full support
+    assert transport_status({**base, "confidence_source": "none"}, cfg) == "supported_with_caution"
+    assert transport_status({**base, "confidence_source": "support"}, cfg) == "supported"
+    # absence is judged on cells with local reference support
+    assert transport_status({**base, "n_cells_supported": 10}, cfg) == "absent"
+
+
+def test_config_validation():
+    with pytest.raises(ValueError, match="ood_rule"):
+        TransportConfig(ood_rule="nope")
+    with pytest.raises(ValueError, match="ood_quantile"):
+        TransportConfig(ood_rule="quantile", ood_quantile=0.5)
+    with pytest.raises(ValueError, match="min_support"):
+        TransportConfig(min_support=2.0)
+    TransportConfig(min_support=None, ood_rule="quantile", ood_quantile=0.95)
+
+
+def test_local_support_is_computed_in_the_latent(validated_ref, transport_pair):
+    _, qry, _ = transport_pair
+    Z = qry.obsm["X_latent"]
+    P = validated_ref.backend_.predict_proba(Z)
+    labels = validated_ref.backend_.classes_[P.argmax(axis=1)]
+    preds = Predictions.from_arrays(
+        qry.obs_names, labels, proba=P, states=list(validated_ref.backend_.classes_), backend="ext"
+    )
+    route = validate_transport(validated_ref, qry, group_key="donor_id", predictions=preds)
+    sup = route.cells["support"]
+    assert route.reference["support"] == {"source": "latent_knn", "n_neighbors": 15}
+    assert route.reference["confidence_source"] == "backend"
+    assert sup.notna().all() and sup.between(0, 1).all()
+    # the kNN backend's confidence is its own vote fraction, so support agrees with it closely
+    assert np.corrcoef(sup, route.cells["confidence"])[0, 1] > 0.9
+    # a label the latent neighbourhood does not carry has no support -> uncertain, not observed
+    swapped = labels.copy()
+    s0 = swapped == "S0"
+    swapped[s0] = "S2"
+    preds2 = Predictions.from_arrays(qry.obs_names, swapped, backend="ext")
+    route2 = validate_transport(validated_ref, qry, group_key="donor_id", predictions=preds2)
+    cells2 = route2.cells
+    assert (cells2.loc[s0, "support"] < 0.5).mean() > 0.9
+    assert (cells2.loc[s0, "category"] != "supported").mean() > 0.9
+    assert route2.states.loc["S0", "status"] == "absent"
+    assert route2.states.loc["S2", "n_cells_supported"] < route2.states.loc["S2", "n_cells"]
+    # a tool's own support is kept as given
+    preds3 = Predictions.from_arrays(
+        qry.obs_names, labels, proba=P, states=list(preds.states), support=np.ones(len(labels))
+    )
+    route3 = validate_transport(validated_ref, qry, group_key="donor_id", predictions=preds3)
+    assert route3.reference["support"]["source"] == "backend"
+    assert (route3.cells["support"] == 1.0).all()
+    # disabling the rule restores observation on every assigned cell
+    route4 = validate_transport(
+        validated_ref,
+        qry,
+        group_key="donor_id",
+        predictions=preds2,
+        config=TransportConfig(min_support=None),
+    )
+    assert (route4.states["n_cells_supported"] == route4.states["n_cells"]).all()
+
+
+def test_labels_only_predictions(validated_ref, transport_pair):
+    _, qry, _ = transport_pair
+    Z = qry.obsm["X_latent"]
+    labels = validated_ref.backend_.classes_[validated_ref.backend_.predict_proba(Z).argmax(axis=1)]
+    preds = Predictions.from_arrays(qry.obs_names, labels, backend="labels")
+    assert preds.confidence.isna().all()
+    # with the query latent, local support stands in for confidence
+    route = validate_transport(validated_ref, qry, group_key="donor_id", predictions=preds)
+    assert route.reference["confidence_source"] == "support"
+    assert (route.states["confidence_source"] == "support").all()
+    assert route.cells["confidence"].notna().all()
+    assert (route.states.loc[["S0", "S2"], "status"] == "supported").all()
+    assert route.states.loc["S4", "status"] == "absent"
+    # without a latent, recovery is judged on counts and every state is at most a caution
+    q = qry.copy()
+    del q.obsm["X_latent"]
+    with pytest.warns(UserWarning, match="no confidence"):
+        bare = validate_transport(validated_ref, q, group_key="donor_id", predictions=preds)
+    assert bare.reference["confidence_source"] == "none"
+    assert bare.reference["support"]["source"] == "none"
+    assert not (bare.states["status"] == "supported").any()
+    assert (bare.states.loc[["S0", "S2"], "status"] == "supported_with_caution").all()
+    assert bare.states.loc["S4", "status"] == "absent"
+    assert bare.cells["confidence"].isna().all()
+    assert (bare.cells["category"] != "uncertain").all()
+
+
+def test_ood_rule_quantile(transport_pair):
+    import warnings
+
+    ref_adata, qry, _ = transport_pair
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), **REF_KW).fit()
+        ref.leave_one_group_out()
+    cal = ref.distance_calibration_
+    r_q = validate_transport(
+        ref,
+        qry,
+        group_key="donor_id",
+        query_state_key="cell_state",
+        config=TransportConfig(ood_rule="quantile", ood_quantile=0.95),
+    )
+    assert r_q.reference["ood_rule"] == "quantile"
+    cells = r_q.cells
+    # the mask is exactly "distance above the state's held-out 95th percentile"
+    thr = cells["state"].map(cal["q95_holdout"]).to_numpy(dtype=float)
+    expect = np.nan_to_num(cells["distance"].to_numpy(dtype=float), nan=0.0) > thr
+    known = cells["state"] != schema.UNKNOWN_LABEL
+    assert ((cells["category"] == "out_of_reference").to_numpy()[known] == expect[known]).all()
+    # intact states from new donors are flagged near the nominal 5 %
+    stable = cells["true_state"].isin(["S0", "S2"])
+    rate = (cells.loc[stable, "category"] == "out_of_reference").mean()
+    assert 0.0 < rate < 0.15
+    # no calibration -> the z rule is applied and recorded
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref2 = Reference(ref_adata.copy(), **REF_KW).fit()
+    r_fallback = validate_transport(
+        ref2,
+        qry,
+        group_key="donor_id",
+        config=TransportConfig(ood_rule="quantile", require_reference_validation=False),
+    )
+    assert r_fallback.reference["ood_rule"] == "z"
+    r_z = validate_transport(
+        ref2, qry, group_key="donor_id", config=TransportConfig(require_reference_validation=False)
+    )
+    assert (r_fallback.cells["category"] == r_z.cells["category"]).all()
 
 
 def test_outputs_and_report(validated_ref, transport_pair, tmp_path):

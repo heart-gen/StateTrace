@@ -55,9 +55,12 @@ STATE_COLUMNS = (
     "recovery_rate",
     "groups_recovered_in_reference",
     "n_cells",
+    "n_cells_supported",
     "n_cells_in_reference",
     "fraction_of_query",
     "median_confidence",
+    "median_support",
+    "confidence_source",
     "uncertain_fraction",
     "ood_fraction",
     "shift",
@@ -87,15 +90,32 @@ class TransportConfig:
     Parameters
     ----------
     min_cells_per_group
-        A group *observes* a state when at least this many of its cells map to it.
+        A group *observes* a state when at least this many of its cells map to it with local
+        reference support (see ``min_support``).
     min_cells_total
-        Below this many query cells a state is ``absent``.
+        Below this many supported query cells a state is ``absent``.
     min_confidence
         A group *recovers* an observed state when the median confidence of those cells is at
         least this value and their out-of-reference fraction is at most ``max_ood_fraction``.
+        When the tool gives no confidence, local support stands in for it
+        (``confidence_source = "support"``); with neither, the clause is skipped and every
+        state is at most ``supported_with_caution``.
     uncertain_below, ood_z
         Per-cell category cut-offs; ``ood_z`` is a standardised reference distance
         (see :mod:`statetrace.novelty`).
+    min_support, support_neighbors
+        Local reference support is the fraction of a cell's ``support_neighbors`` nearest
+        reference cells, in the tool's latent, that carry the assigned state; it is computed
+        by StateTrace whenever the query latent is available and the tool gave no support of
+        its own. Cells below ``min_support`` are ``uncertain`` and do not count towards a
+        group observing the state, so an absent state that a non-abstaining mapper still
+        labels reads ``absent``. ``None`` disables the rule.
+    ood_rule, ood_quantile
+        ``"z"`` flags a cell as out of reference when its standardised distance exceeds
+        ``ood_z``; ``"quantile"`` flags it when its raw distance exceeds the ``ood_quantile``
+        (0.95 or 0.99) of the held-out reference distances of its state, which fixes the
+        false out-of-reference rate on new donors at about the nominal level (falls back to
+        the z rule when the reference carries no held-out calibration).
     min_groups_recovered
         Fewer recovering groups -> ``insufficient``.
     caution_recovery_rate, caution_uncertain_fraction
@@ -131,6 +151,10 @@ class TransportConfig:
     min_confidence: float = 0.6
     uncertain_below: float = 0.6
     ood_z: float = 3.0
+    min_support: float | None = 0.5
+    support_neighbors: int = 15
+    ood_rule: str = "z"
+    ood_quantile: float = 0.99
     min_groups_recovered: int = 3
     caution_recovery_rate: float = 0.8
     caution_uncertain_fraction: float = 0.2
@@ -146,6 +170,14 @@ class TransportConfig:
     def __post_init__(self) -> None:
         if self.shift_source not in ("auto", "expression", "latent"):
             raise ValueError("shift_source must be 'auto', 'expression' or 'latent'")
+        if self.ood_rule not in novelty.OOD_RULES:
+            raise ValueError(f"ood_rule must be one of {novelty.OOD_RULES}")
+        if self.ood_rule == "quantile" and float(self.ood_quantile) not in (0.95, 0.99):
+            raise ValueError("ood_quantile must be 0.95 or 0.99")
+        if self.min_support is not None and not 0 <= self.min_support <= 1:
+            raise ValueError("min_support must lie in [0, 1] or be None")
+        if self.support_neighbors < 1:
+            raise ValueError("support_neighbors must be >= 1")
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -155,7 +187,7 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     """
     Rule-based status for one state, evaluated in order.
 
-    1. ``absent``: too few query cells or no observing group.
+    1. ``absent``: too few supported query cells or no observing group.
     2. ``insufficient``: the reference itself does not reproduce the state.
     3. Displaced (high shift in the deciding coordinate system, or out-of-reference fraction
        above the maximum): if the cells that *do* lie within the reference distribution still
@@ -163,9 +195,11 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
        next to an otherwise intact state -> ``supported_with_caution`` (``novel_population``);
        otherwise ``shifted``.
     4. ``insufficient``: too few query groups recover the state.
-    5. ``supported_with_caution`` on any caution trigger, else ``supported``.
+    5. ``supported_with_caution`` on any caution trigger (including a tool that gives neither
+       confidence nor a latent to compute support from), else ``supported``.
     """
-    if row["n_cells"] < cfg.min_cells_total or row["groups_observed"] == 0:
+    n_supported = row.get("n_cells_supported", row["n_cells"])
+    if n_supported < cfg.min_cells_total or row["groups_observed"] == 0:
         return "absent"
     rep = row["ref_reproducibility"]
     if rep in ("fragile", "insufficient"):
@@ -188,6 +222,7 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
             and row["uncertain_fraction"] > cfg.caution_uncertain_fraction
         )
         or row["shift_level"] == "moderate"
+        or row.get("confidence_source", "backend") == "none"
     )
     return "supported_with_caution" if caution else "supported"
 
@@ -204,7 +239,8 @@ class TransportRoute:
     groups
         Long table, one row per (query group, state) with counts, confidence and recovery.
     cells
-        Per query cell: group, state, confidence, margin, support, novelty, category.
+        Per query cell: group, state, confidence, margin, support, distance, novelty,
+        category.
     predictions
         The :class:`~statetrace.predictions.Predictions` that were evaluated.
     expression
@@ -363,13 +399,9 @@ def _predictions_from_reference(
     states = reference.states_
     P = np.zeros((Z.shape[0], len(states)))
     P[:, np.searchsorted(states, b.classes_)] = P_local
-    support = None
-    if hasattr(b, "neighbor_votes"):
-        V = b.neighbor_votes(Z)
-        support = V.max(axis=1) / V.sum(axis=1).clip(min=1)
     labels = states[P.argmax(axis=1)]
     preds = Predictions.from_arrays(
-        query.obs_names, labels, proba=P, states=list(states), support=support, backend=b.name
+        query.obs_names, labels, proba=P, states=list(states), backend=b.name
     )
     return preds, Z
 
@@ -504,10 +536,15 @@ def validate_transport(
     labels = preds.labels.to_numpy().astype(object)
     known = np.isin(labels, states)
     codes = np.array([pos.get(lab, -1) for lab in labels])
-    conf = preds.confidence.to_numpy()
+    conf = preds.confidence.to_numpy(dtype=float)
     nov = np.full(len(labels), np.nan)
+    dist = np.full(len(labels), np.nan)
+    ood = np.zeros(len(labels), dtype=bool)
+    ood_rule_applied = "z"
     shift = np.full(len(states), np.nan)
     cohort_offset = np.zeros(reference.latent_.shape[1], dtype=np.float32)
+    support = preds.support.to_numpy(dtype=float) if preds.support is not None else None
+    support_source = "backend" if support is not None else "none"
     if Z is not None:
         if cfg.correct_cohort_offset:
             cohort_offset = novelty.estimate_cohort_offset(
@@ -518,14 +555,62 @@ def validate_transport(
             reference.distance_calibration_ if cfg.novelty_calibration == "holdout" else None
         )
         geometry = novelty.calibrated_geometry(reference.geometry_, calibration, states)
+        dist = novelty.raw_distance(Z, codes, reference.centroids_)
         nov = novelty.reference_distance(Z, codes, reference.centroids_, geometry)
+        ood, ood_rule_applied = novelty.out_of_reference_mask(
+            dist,
+            nov,
+            codes,
+            rule=cfg.ood_rule,
+            z=cfg.ood_z,
+            quantile=cfg.ood_quantile,
+            calibration=calibration,
+            states=states,
+        )
         shift = novelty.centroid_shift(
             Z, codes, reference.centroids_, reference.geometry_, len(states)
         )
+        if support is None:
+            # StateTrace's own local support: label agreement of the nearest reference cells
+            support = novelty.local_support(
+                reference.latent_,
+                reference.states_[reference.state_codes_],
+                Z,
+                codes,
+                states,
+                n_neighbors=cfg.support_neighbors,
+                backend=reference.backend_,
+            )
+            support_source = "latent_knn"
+    if np.isfinite(conf).any():
+        confidence_source = "backend"
+    elif support is not None and np.isfinite(support).any():
+        confidence_source = "support"
+        conf = np.array(support, dtype=float)
+    else:
+        confidence_source = "none"
+        warnings.warn(
+            f"{preds.backend}: predictions carry no confidence and no query latent is "
+            "available to compute local support; group recovery is judged on counts alone "
+            "and every state is at most supported_with_caution.",
+            UserWarning,
+            stacklevel=2,
+        )
     category = novelty.cell_category(
-        conf, nov, uncertain_below=cfg.uncertain_below, ood_z=cfg.ood_z
+        conf,
+        nov,
+        uncertain_below=cfg.uncertain_below,
+        ood_z=cfg.ood_z,
+        support=support,
+        min_support=cfg.min_support,
+        out_of_reference=ood,
     )
     category[~known] = "out_of_reference"
+    supported_label = known & (
+        np.ones(len(labels), dtype=bool)
+        if support is None or cfg.min_support is None
+        else np.nan_to_num(support, nan=1.0) >= cfg.min_support
+    )
     in_ref = category != "out_of_reference"
     shift_in_ref = np.full(len(states), np.nan)
     if Z is not None:
@@ -569,12 +654,14 @@ def validate_transport(
             "confidence": conf,
             "margin": preds.margin().to_numpy(),
             "second_best": preds.second_best().to_numpy(),
-            "support": preds.support.to_numpy() if preds.support is not None else np.nan,
+            "support": support if support is not None else np.nan,
+            "distance": dist,
             "novelty": nov,
             "category": category,
         },
         index=pd.Index(query.obs_names.astype(str), name="cell"),
     )
+    cells["_supported_label"] = supported_label
     if query_state_key is not None:
         cells["true_state"] = query.obs[query_state_key].astype(str).to_numpy()
 
@@ -582,10 +669,13 @@ def validate_transport(
     g = cells.groupby(["group", "state"], sort=True)
     groups = g.agg(
         n_cells=("state", "size"),
+        n_supported=("_supported_label", "sum"),
         median_confidence=("confidence", "median"),
+        median_support=("support", "median"),
         uncertain_fraction=("category", lambda c: float((c == "uncertain").mean())),
         ood_fraction=("category", lambda c: float((c == "out_of_reference").mean())),
     ).reset_index()
+    groups["n_supported"] = groups["n_supported"].astype(int)
     per_group_total = cells.groupby("group").size()
     groups["fraction_of_group"] = (
         groups["n_cells"] / groups["group"].map(per_group_total).to_numpy()
@@ -601,15 +691,19 @@ def validate_transport(
     )
     groups = groups.merge(g_in, on=["group", "state"], how="left")
     groups["n_in_reference"] = groups["n_in_reference"].fillna(0).astype(int)
-    groups["observed"] = groups["n_cells"] >= cfg.min_cells_per_group
+    groups["observed"] = groups["n_supported"] >= cfg.min_cells_per_group
+    if confidence_source == "none":
+        conf_ok = pd.Series(True, index=groups.index)
+        conf_ok_in = conf_ok
+    else:
+        conf_ok = groups["median_confidence"].fillna(0) >= cfg.min_confidence
+        conf_ok_in = groups["median_confidence_in_reference"].fillna(0) >= cfg.min_confidence
     groups["recovered"] = (
-        groups["observed"]
-        & (groups["median_confidence"].fillna(0) >= cfg.min_confidence)
-        & (groups["ood_fraction"] <= cfg.max_ood_fraction)
+        groups["observed"] & conf_ok & (groups["ood_fraction"] <= cfg.max_ood_fraction)
     )
-    groups["recovered_in_reference"] = (groups["n_in_reference"] >= cfg.min_cells_per_group) & (
-        groups["median_confidence_in_reference"].fillna(0) >= cfg.min_confidence
-    )
+    groups["recovered_in_reference"] = (
+        groups["n_in_reference"] >= cfg.min_cells_per_group
+    ) & conf_ok_in
     groups = groups[groups["state"] != schema.UNKNOWN_LABEL]
     if expr_table is not None:
         e = expr_table[~expr_table["in_reference_only"]][
@@ -638,6 +732,7 @@ def validate_transport(
                 "groups_recovered": gs["recovered"].sum(),
                 "groups_recovered_in_reference": gs["recovered_in_reference"].sum(),
                 "n_cells": gs["n_cells"].sum(),
+                "n_cells_supported": gs["n_supported"].sum(),
                 "n_cells_in_reference": gs["n_in_reference"].sum(),
             }
         )
@@ -652,6 +747,8 @@ def validate_transport(
     st["fraction_of_query"] = st["n_cells"] / len(cells)
     cs = cells[cells["state"] != schema.UNKNOWN_LABEL].groupby("state")
     st["median_confidence"] = cs["confidence"].median().reindex(states)
+    st["median_support"] = cs["support"].median().reindex(states)
+    st["confidence_source"] = confidence_source
     st["uncertain_fraction"] = (
         cs["category"].apply(lambda c: float((c == "uncertain").mean())).reindex(states)
     )
@@ -710,6 +807,7 @@ def validate_transport(
     st["status"] = [transport_status(row, cfg) for _, row in st.iterrows()]
     st.index.name = "state"
     st = st[list(STATE_COLUMNS)]
+    cells = cells.drop(columns="_supported_label")
 
     route = TransportRoute(
         group_key=group_key,
@@ -732,6 +830,12 @@ def validate_transport(
                 and reference.distance_calibration_ is not None
                 else ("in_sample" if Z is not None else None)
             ),
+            "confidence_source": confidence_source,
+            "support": {
+                "source": support_source,
+                "n_neighbors": cfg.support_neighbors if support_source == "latent_knn" else None,
+            },
+            "ood_rule": ood_rule_applied if Z is not None else None,
             "cohort_offset_norm": float(np.linalg.norm(cohort_offset)) if Z is not None else None,
             "cohort_offset_per_dim_sd": (
                 float(

@@ -51,19 +51,45 @@ The two systems together separate four outcomes:
 
 ## Per cell
 
-`confidence` (from the backend), `margin`, `support` (neighbour vote fraction or mapping
-score), `novelty` (standardised distance to the assigned state's reference centroid: how many
-reference standard deviations above the typical distance of that state's own cells; needs the
-query in the reference latent, after removing the estimated cohort offset) and `category`:
-`out_of_reference` when novelty exceeds `ood_z`, else `uncertain` when confidence is below
-`uncertain_below`, else `supported`. Labels the reference does not know are `unknown` and
-`out_of_reference`.
+`confidence` (from the backend), `margin`, `support`, `distance` and `novelty` (raw and
+standardised distance to the assigned state's reference centroid: how many reference
+standard deviations above the typical distance of that state's own cells; both need the query
+in the reference latent, after removing the estimated cohort offset) and `category`:
+`out_of_reference` by the out-of-reference rule below, else `uncertain` when confidence is
+below `uncertain_below` or local support is below `min_support`, else `supported`. Labels the
+reference does not know are `unknown` and `out_of_reference`.
+
+**Local reference support.** `support` is the fraction of a cell's `support_neighbors` (15)
+nearest *reference* cells, in the tool's latent, that carry the state the tool assigned. A
+tool that reports its own support (Symphony and Azimuth mapping scores, the kNN vote fraction)
+keeps it; otherwise StateTrace computes it whenever the query latent is available, so the
+judgement does not depend on the mapper abstaining or on how it scores confidence. A label
+whose neighbourhood is made of other states has no reference support: the cell is `uncertain`
+and does not count towards its donor observing the state, which is how a state absent from
+the query still reads `absent` under a mapper that labels every cell. `route.reference["support"]`
+records the source (`backend`, `latent_knn` or `none`).
+
+**Labels-only predictions.** When a tool gives labels but no confidence, local support stands
+in for confidence (`confidence_source = "support"`, recorded per state and in
+`route.reference`). With neither confidence nor a latent, donor recovery is judged on counts
+alone, `confidence_source` is `none`, and every state is at most `supported_with_caution`.
+
+**Out-of-reference rule** (`ood_rule`). `"z"` (default) flags a cell whose standardised
+distance exceeds `ood_z` (3). `"quantile"` flags a cell whose raw distance exceeds the
+`ood_quantile` (0.95 or 0.99) of the held-out reference distances of its state, stored by
+grouped validation, so genuine cells of an intact state from a new donor are flagged at about
+the nominal rate; without a calibration the z rule is applied and
+`route.reference["ood_rule"]` says so. The benchmark's withheld-state curve
+(`statetrace_benchmark.simulation.withheld_state`) traces power and false rate of both rules
+over state separation; the rule used on real data is predeclared from it.
 
 ## Per donor x state
 
-`n_cells`, `fraction_of_group`, `median_confidence`, `uncertain_fraction`, `ood_fraction`,
-`observed` (at least `min_cells_per_group` cells) and `recovered` (observed, median confidence
-at least `min_confidence`, out-of-reference fraction at most `max_ood_fraction`).
+`n_cells`, `n_supported` (cells at or above `min_support`), `fraction_of_group`,
+`median_confidence`, `median_support`, `uncertain_fraction`, `ood_fraction`, `observed` (at
+least `min_cells_per_group` supported cells) and `recovered` (observed, median confidence at
+least `min_confidence` when a confidence exists, out-of-reference fraction at most
+`max_ood_fraction`).
 
 ## Per state
 
@@ -71,7 +97,9 @@ at least `min_confidence`, out-of-reference fraction at most `max_ood_fraction`)
 |---|---|
 | `ref_groups`, `ref_reproducibility` | donors supporting the state in the reference and its grouped-holdout category (`unvalidated` if no holdout ran) |
 | `groups_observed`, `groups_recovered`, `recovery_rate` | query donors observing and recovering the state |
-| `median_confidence`, `uncertain_fraction`, `ood_fraction` | over the query cells assigned to the state |
+| `n_cells`, `n_cells_supported` | query cells assigned to the state, and those with local reference support |
+| `median_confidence`, `median_support`, `uncertain_fraction`, `ood_fraction` | over the query cells assigned to the state |
+| `confidence_source` | `backend`, `support` (local support stands in for a missing confidence) or `none` |
 | `shift`, `shift_level`, `shift_source` | the deciding shift, in reference sd units, and the coordinate system it came from (`expression` when the reference carries an expression space and the query has its genes, else `latent`): low (< 2) / moderate / high (>= 4) / unknown |
 | `expression_shift`, `expression_shift_level`, `groups_shifted`, `groups_scored_expression` | median over query donors of the donor x state pseudobulk distance standardised against held-out reference donors; donors at or above the high threshold, of donors with enough cells |
 | `latent_shift`, `latent_shift_level` | centroid shift in the mapping latent after cohort-offset removal, in per-dimension reference sd (secondary evidence) |
@@ -84,11 +112,11 @@ at least `min_confidence`, out-of-reference fraction at most `max_ood_fraction`)
 
 | Status | Rule (defaults of {class}`~statetrace.TransportConfig`) |
 |---|---|
-| `absent` | fewer than `min_cells_total` (50) query cells or no donor observes it |
+| `absent` | fewer than `min_cells_total` (50) supported query cells or no donor observes it |
 | `insufficient` (reference) | reference reproducibility `fragile` or `insufficient` |
 | `shifted` | `shift_level` high (at least 4 reference sd in the deciding coordinate system) or `ood_fraction` above `max_ood_fraction` (0.3), unless the in-reference cells still recover the state in enough groups with low shift, in which case an out-of-reference population sits beside an intact state -> `supported_with_caution` with `novel_population` |
 | `insufficient` (query) | fewer than `min_groups_recovered` (3) donors recover it |
-| `supported_with_caution` | reference reproducibility `moderate` or `unvalidated`, recovery rate below 0.8, uncertain fraction above 0.2, or moderate shift |
+| `supported_with_caution` | reference reproducibility `moderate` or `unvalidated`, recovery rate below 0.8, uncertain fraction above 0.2, moderate shift, or no confidence evidence at all (`confidence_source` `none`) |
 | `supported` | otherwise |
 
 The rules are descriptive defaults meant to be predeclared in a benchmark and reported with

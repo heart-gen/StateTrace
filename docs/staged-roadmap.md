@@ -93,11 +93,14 @@ data with a shift diagnostic that does not depend on the mapper's latent.
   today while a neighbour shows a high expression shift with an out-of-reference population.
   Implement whichever design the PI chooses.
 - Local support computed inside `validate_transport` from a kNN in the tool's latent, so
-  absence detection does not depend on the backend abstaining.
+  absence detection does not depend on the backend abstaining. Done (`min_support`).
 - Novelty decision rule: the standardised distance ranks novel cells well (AUROC 0.86 at the
-  hard cell) but the 3-sd rule flags under a tenth of them; add the withheld-state curve over
-  separation to the simulation stage and choose the rule from it, predeclared.
-- Labels-only `Predictions` (no confidence) should not read `insufficient` on every state.
+  hard cell) but the 3-sd rule flags under a tenth of them. The withheld-state curve over
+  separation (`simulation.withheld_state`) and the `ood_rule` option are done; the PI chooses
+  the rule from the curve and predeclares it in `configs/thresholds.yaml`.
+- Labels-only `Predictions` (no confidence) no longer read `insufficient` on every state:
+  local support stands in for confidence, and without a latent the states are at most
+  `supported_with_caution`. Done (`confidence_source`).
 - Tag v0.1.0; CI green; docs build clean.
 
 ### Checklist
@@ -108,9 +111,9 @@ data with a shift diagnostic that does not depend on the mapper's latent.
 - [x] `simulate_transport` regenerates query counts from the final latent
 - [x] Benchmark scores shift evidence separately from status
 - [ ] Identity-loss status (PI decision)
-- [ ] Local support in the tool's latent
-- [ ] Novelty decision rule from the withheld-state curve
-- [ ] Labels-only predictions path
+- [x] Local support in the tool's latent (`novelty.local_support`, `min_support`)
+- [x] Novelty decision rule from the withheld-state curve (`ood_rule`; curve in `simulation.withheld_state`; rule to be predeclared by the PI)
+- [x] Labels-only predictions path (`confidence_source`)
 - [ ] Full grid on Bridges-2 (`01_simulation/_h/02c.comparators.sh`, about 20 GPU-hours)
 - [ ] `00_gates/_m/G0.md`; tag v0.1.0
 

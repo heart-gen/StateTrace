@@ -22,8 +22,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hold the deciding value. Per donor x state: `route.expression` and
   `expression_distance` / `expression_shift_z` / `expression_shift_p` / `shifted` in `groups`.
   The transport report states which coordinate system each conclusion came from.
+- Local reference support computed by StateTrace (`novelty.local_support`): the fraction of a
+  query cell's nearest reference cells, in the tool's latent, that carry the assigned state.
+  Used whenever the tool reports no support of its own. Cells below
+  `TransportConfig.min_support` (0.5) are `uncertain` and do not count towards a donor
+  observing the state, so absence detection no longer depends on the mapper abstaining. New
+  columns `n_cells_supported`, `median_support` (states), `n_supported`, `median_support`
+  (groups); `route.reference["support"]` records the source.
+- Labels-only predictions: when a tool gives no confidence, local support stands in for it
+  (`confidence_source = "support"`); with neither confidence nor a latent, donor recovery is
+  judged on counts and every state is at most `supported_with_caution`
+  (`confidence_source = "none"`, new state column).
+- Out-of-reference rule `TransportConfig.ood_rule`: `"z"` (standardised distance above
+  `ood_z`, the previous behaviour) or `"quantile"` (raw distance above the held-out 95th or
+  99th percentile of the state, `ood_quantile`), with the applied rule in
+  `route.reference["ood_rule"]`; `cells` gains the raw `distance`. The benchmark's
+  withheld-state curve chooses the rule to predeclare.
 
 ### Changed
+- The built-in kNN path no longer attaches its vote fraction as `Predictions.support`; local
+  support is computed once, after cohort-offset removal, for every backend alike.
 - `simulate_transport` regenerates the query counts from the final query latent, so the cohort
   effect and every planted shift are present in expression as well as in `obsm`. Before, only
   the latent carried them, and a mapper that saw the counts never faced the planted scenario.
