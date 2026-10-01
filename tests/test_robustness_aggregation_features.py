@@ -34,7 +34,7 @@ def test_compare_backends_routes(validated_ref, transport_pair):
     assert cmp_.cell_agreement > 0.9 and cmp_.pairwise.loc["knn15", "knn5"] > 0.9
     assert cmp_.state_concordance.loc["S0", "concordance"] > 0.9
     assert cmp_.status_table is not None and cmp_.status_table["status_agreement"].mean() >= 0.8
-    assert cmp_.status_table.loc["S0", "consensus"] == "supported"
+    assert cmp_.status_table.loc["S2", "consensus"] == "supported"
     assert "status agreement" in cmp_.summary()
     # predictions only: no status table; disagreement shows up
     flipped = Predictions(labels=p5.labels.replace({"S0": "S2", "S2": "S0"}), backend="flip")

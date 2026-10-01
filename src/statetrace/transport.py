@@ -60,6 +60,8 @@ STATE_COLUMNS = (
     "fraction_of_query",
     "median_confidence",
     "median_support",
+    "support_threshold",
+    "ood_threshold",
     "confidence_source",
     "uncertain_fraction",
     "ood_fraction",
@@ -103,19 +105,38 @@ class TransportConfig:
     uncertain_below, ood_z
         Per-cell category cut-offs; ``ood_z`` is a standardised reference distance
         (see :mod:`statetrace.novelty`).
-    min_support, support_neighbors
-        Local reference support is the fraction of a cell's ``support_neighbors`` nearest
-        reference cells, in the tool's latent, that carry the assigned state; it is computed
-        by StateTrace whenever the query latent is available and the tool gave no support of
-        its own. Cells below ``min_support`` are ``uncertain`` and do not count towards a
-        group observing the state, so an absent state that a non-abstaining mapper still
-        labels reads ``absent``. ``None`` disables the rule.
-    ood_rule, ood_quantile
-        ``"z"`` flags a cell as out of reference when its standardised distance exceeds
-        ``ood_z``; ``"quantile"`` flags it when its raw distance exceeds the ``ood_quantile``
-        (0.95 or 0.99) of the held-out reference distances of its state, which fixes the
-        false out-of-reference rate on new donors at about the nominal level (falls back to
-        the z rule when the reference carries no held-out calibration).
+    min_support, support_neighbors, support_calibration, support_quantile
+        Local reference support is the fraction of a cell's nearest reference cells, in the
+        tool's latent, that carry the assigned state (the reference's kNN backend supplies
+        the neighbours when it is one, else a cosine kNN with ``support_neighbors``); it is
+        computed by StateTrace whenever the query latent is available and the tool gave no
+        support of its own. Cells below the state's support threshold are ``uncertain`` and
+        do not count towards a group observing the state, so an absent state that a
+        non-abstaining mapper still labels reads ``absent``. With
+        ``support_calibration="holdout"`` the threshold is, per state, the smaller of
+        ``min_support`` and the ``support_quantile`` (0.05 or 0.10) of the support that
+        held-out reference cells of that state achieved in grouped validation, so a state
+        whose own cells are mixed (a continuum, a fragile boundary) is not asked for more than
+        it gives; ``"fixed"`` or a reference without calibration uses ``min_support`` for
+        every state. ``min_support=None`` disables the rule.
+    ood_score, ood_rule, ood_z, ood_quantile
+        Out-of-reference call. ``ood_score`` is the evidence: ``"centroid"`` (distance to the
+        state's reference centroid), ``"knn"`` (distance to the k-th nearest reference cell)
+        or ``"joint"`` (the larger of the two standardised distances). ``ood_rule="z"`` flags a
+        cell whose standardised score exceeds ``ood_z``; ``"quantile"`` flags one whose score
+        exceeds the ``ood_quantile`` (0.95 or 0.99) of the held-out reference cells of its
+        state, which fixes the false rate on new donors at about the nominal level. The
+        ``knn`` and ``joint`` scores and the quantile rule need the held-out calibration from
+        grouped validation; without it the centroid z rule is applied and
+        ``route.reference["ood_rule"]`` says so.
+    population_calibration, population_quantile, population_floor
+        Threshold on a state's out-of-reference fraction for the ``novel_population`` call and
+        the displacement trigger. ``"holdout"`` uses, per state, the larger of
+        ``population_floor`` and the ``population_quantile`` (default 1.0, the maximum) over
+        held-out reference donors of the fraction of their cells the active rule flags, so
+        the call means "more than any reference donor showed, and at least the floor";
+        ``"fixed"`` uses ``max_ood_fraction``. Per-donor recovery always uses
+        ``max_ood_fraction``.
     min_groups_recovered
         Fewer recovering groups -> ``insufficient``.
     caution_recovery_rate, caution_uncertain_fraction
@@ -153,8 +174,14 @@ class TransportConfig:
     ood_z: float = 3.0
     min_support: float | None = 0.5
     support_neighbors: int = 15
+    support_calibration: str = "holdout"
+    support_quantile: float = 0.05
+    ood_score: str = "centroid"
     ood_rule: str = "z"
     ood_quantile: float = 0.99
+    population_calibration: str = "holdout"
+    population_quantile: float = 1.0
+    population_floor: float = 0.1
     min_groups_recovered: int = 3
     caution_recovery_rate: float = 0.8
     caution_uncertain_fraction: float = 0.2
@@ -172,6 +199,18 @@ class TransportConfig:
             raise ValueError("shift_source must be 'auto', 'expression' or 'latent'")
         if self.ood_rule not in novelty.OOD_RULES:
             raise ValueError(f"ood_rule must be one of {novelty.OOD_RULES}")
+        if self.ood_score not in novelty.OOD_SCORES:
+            raise ValueError(f"ood_score must be one of {novelty.OOD_SCORES}")
+        if self.support_calibration not in ("holdout", "fixed"):
+            raise ValueError("support_calibration must be 'holdout' or 'fixed'")
+        if float(self.support_quantile) not in (0.05, 0.10):
+            raise ValueError("support_quantile must be 0.05 or 0.10")
+        if self.population_calibration not in ("holdout", "fixed"):
+            raise ValueError("population_calibration must be 'holdout' or 'fixed'")
+        if not 0 < self.population_quantile <= 1:
+            raise ValueError("population_quantile must lie in (0, 1]")
+        if not 0 <= self.population_floor <= 1:
+            raise ValueError("population_floor must lie in [0, 1]")
         if self.ood_rule == "quantile" and float(self.ood_quantile) not in (0.95, 0.99):
             raise ValueError("ood_quantile must be 0.95 or 0.99")
         if self.min_support is not None and not 0 <= self.min_support <= 1:
@@ -204,8 +243,10 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     rep = row["ref_reproducibility"]
     if rep in ("fragile", "insufficient"):
         return "insufficient"
+    ood_thr = row.get("ood_threshold", cfg.max_ood_fraction)
+    ood_thr = cfg.max_ood_fraction if ood_thr is None or not np.isfinite(ood_thr) else ood_thr
     displaced = row["shift_level"] == "high" or (
-        np.isfinite(row["ood_fraction"]) and row["ood_fraction"] > cfg.max_ood_fraction
+        np.isfinite(row["ood_fraction"]) and row["ood_fraction"] > ood_thr
     )
     if displaced:
         coherent = row["groups_recovered_in_reference"] >= cfg.min_groups_recovered and row[
@@ -240,7 +281,7 @@ class TransportRoute:
         Long table, one row per (query group, state) with counts, confidence and recovery.
     cells
         Per query cell: group, state, confidence, margin, support, distance, novelty,
-        category.
+        knn_distance, knn_novelty, joint_novelty, category.
     predictions
         The :class:`~statetrace.predictions.Predictions` that were evaluated.
     expression
@@ -539,49 +580,64 @@ def validate_transport(
     conf = preds.confidence.to_numpy(dtype=float)
     nov = np.full(len(labels), np.nan)
     dist = np.full(len(labels), np.nan)
+    knn_dist = np.full(len(labels), np.nan)
+    knn_nov = np.full(len(labels), np.nan)
+    joint_nov = np.full(len(labels), np.nan)
     ood = np.zeros(len(labels), dtype=bool)
-    ood_rule_applied = "z"
+    ood_applied: dict[str, Any] | None = None
     shift = np.full(len(states), np.nan)
     cohort_offset = np.zeros(reference.latent_.shape[1], dtype=np.float32)
     support = preds.support.to_numpy(dtype=float) if preds.support is not None else None
     support_source = "backend" if support is not None else "none"
+    calibration = reference.distance_calibration_
+    support_thr = novelty.support_thresholds(
+        calibration if cfg.support_calibration == "holdout" else None,
+        states,
+        quantile=cfg.support_quantile,
+        default=cfg.min_support,
+    )
+    if cfg.min_support is None:
+        support_thr = np.full(len(states), np.nan)
+    else:
+        support_thr = np.minimum(support_thr, cfg.min_support)
     if Z is not None:
         if cfg.correct_cohort_offset:
             cohort_offset = novelty.estimate_cohort_offset(
                 Z, codes, reference.centroids_, min_cells=cfg.min_cells_per_group
             )
             Z = Z - cohort_offset
-        calibration = (
-            reference.distance_calibration_ if cfg.novelty_calibration == "holdout" else None
-        )
-        geometry = novelty.calibrated_geometry(reference.geometry_, calibration, states)
+        nov_cal = calibration if cfg.novelty_calibration == "holdout" else None
+        geometry = novelty.calibrated_geometry(reference.geometry_, nov_cal, states)
         dist = novelty.raw_distance(Z, codes, reference.centroids_)
         nov = novelty.reference_distance(Z, codes, reference.centroids_, geometry)
-        ood, ood_rule_applied = novelty.out_of_reference_mask(
+        # neighbours in the tool's latent: local support and the kNN distance
+        index = novelty.neighbor_index(
+            reference.latent_,
+            reference.states_[reference.state_codes_],
+            backend=reference.backend_,
+            n_neighbors=cfg.support_neighbors,
+        )
+        own_support, knn_dist = novelty.neighbor_evidence(index, Z, codes, states)
+        if support is None:
+            support = own_support
+            support_source = "latent_knn"
+        knn_nov = novelty.knn_novelty(knn_dist, codes, nov_cal, states)
+        joint_nov = novelty.joint_novelty(nov, knn_nov)
+        ood, ood_applied = novelty.out_of_reference_mask(
             dist,
             nov,
             codes,
             rule=cfg.ood_rule,
             z=cfg.ood_z,
             quantile=cfg.ood_quantile,
-            calibration=calibration,
+            calibration=nov_cal,
             states=states,
+            score=cfg.ood_score,
+            knn_distance=knn_dist,
         )
         shift = novelty.centroid_shift(
             Z, codes, reference.centroids_, reference.geometry_, len(states)
         )
-        if support is None:
-            # StateTrace's own local support: label agreement of the nearest reference cells
-            support = novelty.local_support(
-                reference.latent_,
-                reference.states_[reference.state_codes_],
-                Z,
-                codes,
-                states,
-                n_neighbors=cfg.support_neighbors,
-                backend=reference.backend_,
-            )
-            support_source = "latent_knn"
     if np.isfinite(conf).any():
         confidence_source = "backend"
     elif support is not None and np.isfinite(support).any():
@@ -596,21 +652,42 @@ def validate_transport(
             UserWarning,
             stacklevel=2,
         )
+    # per-cell support threshold (per state when calibrated)
+    cell_thr = np.full(len(labels), np.nan)
+    cell_thr[known] = support_thr[codes[known]]
+    low_support = (
+        np.zeros(len(labels), dtype=bool)
+        if support is None
+        else np.nan_to_num(support, nan=1.0) < np.nan_to_num(cell_thr, nan=-1.0)
+    )
     category = novelty.cell_category(
         conf,
         nov,
         uncertain_below=cfg.uncertain_below,
         ood_z=cfg.ood_z,
-        support=support,
-        min_support=cfg.min_support,
+        support=(~low_support).astype(float),
+        min_support=0.5,  # already thresholded per state: 0 = below the state's threshold
         out_of_reference=ood,
     )
     category[~known] = "out_of_reference"
-    supported_label = known & (
-        np.ones(len(labels), dtype=bool)
-        if support is None or cfg.min_support is None
-        else np.nan_to_num(support, nan=1.0) >= cfg.min_support
-    )
+    supported_label = known & ~low_support
+    # per-state out-of-reference fraction threshold for the population call
+    ood_thr = np.full(len(states), float(cfg.max_ood_fraction))
+    if cfg.population_calibration == "holdout" and Z is not None and ood_applied is not None:
+        ood_thr = novelty.population_thresholds(
+            reference.validation_.holdout_evidence if reference.validation_ is not None else None,
+            calibration,
+            states,
+            score=ood_applied["score"],
+            rule=ood_applied["rule"],
+            z=cfg.ood_z,
+            quantile=cfg.ood_quantile,
+            min_cells=cfg.min_cells_per_group,
+            min_groups=cfg.min_groups_recovered,
+            population_quantile=cfg.population_quantile,
+            default=cfg.max_ood_fraction,
+        )
+        ood_thr = np.maximum(ood_thr, cfg.population_floor)
     in_ref = category != "out_of_reference"
     shift_in_ref = np.full(len(states), np.nan)
     if Z is not None:
@@ -657,6 +734,9 @@ def validate_transport(
             "support": support if support is not None else np.nan,
             "distance": dist,
             "novelty": nov,
+            "knn_distance": knn_dist,
+            "knn_novelty": knn_nov,
+            "joint_novelty": joint_nov,
             "category": category,
         },
         index=pd.Index(query.obs_names.astype(str), name="cell"),
@@ -748,6 +828,8 @@ def validate_transport(
     cs = cells[cells["state"] != schema.UNKNOWN_LABEL].groupby("state")
     st["median_confidence"] = cs["confidence"].median().reindex(states)
     st["median_support"] = cs["support"].median().reindex(states)
+    st["support_threshold"] = support_thr
+    st["ood_threshold"] = ood_thr
     st["confidence_source"] = confidence_source
     st["uncertain_fraction"] = (
         cs["category"].apply(lambda c: float((c == "uncertain").mean())).reindex(states)
@@ -780,7 +862,7 @@ def validate_transport(
     st["shift_in_reference_level"] = novelty.shift_level(
         st["shift_in_reference"], moderate=cfg.shift_moderate, high=cfg.shift_high
     )
-    st["novel_population"] = st["ood_fraction"].fillna(0) > cfg.max_ood_fraction
+    st["novel_population"] = st["ood_fraction"].fillna(0).to_numpy() > ood_thr
     meta = (
         reference.metadata_.state_table.reindex(states) if reference.metadata_ is not None else None
     )
@@ -835,7 +917,23 @@ def validate_transport(
                 "source": support_source,
                 "n_neighbors": cfg.support_neighbors if support_source == "latent_knn" else None,
             },
-            "ood_rule": ood_rule_applied if Z is not None else None,
+            "ood_score": ood_applied["score"] if ood_applied else None,
+            "ood_rule": ood_applied["rule"] if ood_applied else None,
+            "ood_fallback": ood_applied["fallback"] if ood_applied else None,
+            "support_calibration": (
+                "holdout"
+                if cfg.support_calibration == "holdout"
+                and calibration is not None
+                and "support_q05_holdout" in calibration
+                else "fixed"
+            ),
+            "population_calibration": (
+                "holdout"
+                if cfg.population_calibration == "holdout"
+                and reference.validation_ is not None
+                and reference.validation_.holdout_evidence is not None
+                else "fixed"
+            ),
             "cohort_offset_norm": float(np.linalg.norm(cohort_offset)) if Z is not None else None,
             "cohort_offset_per_dim_sd": (
                 float(

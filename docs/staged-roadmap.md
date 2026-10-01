@@ -12,7 +12,7 @@ table and the milestone log when a stage changes state.
 | Stage | Status | Weeks | Deliverables | Promotion gate | Required evidence | Version | Last commit |
 |---|---|---|---|---|---|---|---|
 | 0 | complete | before 1 | Package, grouped validation (donor, study), reproducibility categories, `Predictions`, kNN baseline, frozen format, transport route and gating, report, feature harmonisation | Fresh install, silent import with torch and scvi blocked, full test suite, docs build | CI log, `tests/test_imports.py`, docs build | 0.1.0 (untagged) | `8dcf9bb` |
-| 1 | in progress | 1 - 2 | Two coordinate systems: frozen expression space with per-donor offsets (done); identity-loss status; local support in the tool's latent; novelty decision rule; corrected simulator (done); tag v0.1.0 | **G0** on the full simulation grid: (a) cell accuracy within 2 points of scANVI / scPoli, (b) out-of-reference AUROC >= best comparator - 0.02, (c) >= 90 % planted statuses correct, shift evidence scored separately | `00_gates/_m/G0.md` with both SHAs; grid summary CSV; smoke and rerun reports | 0.1.0 tag, 0.1.1 fixes | `841f1dc` |
+| 1 | in progress | 1 - 2 | Two coordinate systems: frozen expression space with per-donor offsets (done); identity-loss status; local support in the tool's latent (done); novelty scores and calibrated thresholds (done); corrected simulator (done); tag v0.1.0 | **G0** on the full simulation grid: (a) cell accuracy within 2 points of scANVI / scPoli, (b) two arms: the predeclared out-of-reference rule beats the mapper's uncertainty at matched donor-calibrated false rate, and the absorbing state shows a high frozen-expression shift, (c) >= 90 % planted statuses correct, shift evidence scored separately | `00_gates/_m/G0.md` with both SHAs; grid summary CSV; smoke and rerun reports | 0.1.0 tag, 0.1.1 fixes | `841f1dc` |
 | 2 | planned | 3 - 4 | Backend coverage: Symphony adapter (R -> CSV -> `from_symphony`), scConform bridge, scANVI `AnnDataBackend` with per-fold latent refit, Azimuth adapter if signed off; donor-support restriction runs | **G1** semi-synthetic perturbations on the NVU reference; **U1** decided (does the problem exist) | `G1.md`, `U1.md`; withheld-state AUROC table; reproducibility vs donor count; backend status agreement >= 0.8 | 0.2.0 | |
 | 3 | planned | 4 - 6 | Real-data robustness: study-level holdout on real studies; test of the per-donor offset assumption under a real platform effect; group-aware calibration tables; feature-retention reporting | **G2** PBMC and HLCA, **U2** decided (beats simple baselines at predicting replication); **G3** brain | `G2.md`, `U2.md`, `G3.md`; scIB reference table; calibration figure | 0.2.x, 0.3.0 | |
 | 4 | planned | 7 - 8 | Inference validity: downstream-validity helpers (type I error under permuted null, FDR, power, effect-size bias, replication summaries); gated versus ungated pseudobulk and differential-abundance pipeline | **G4** NVU -> SCORCH application and validity layer; **U3** decided (supported states replicate, gating controls type I error) | `G4.md`, `U3.md`; error-rate and replication tables | 0.3.0 | |
@@ -96,8 +96,12 @@ data with a shift diagnostic that does not depend on the mapper's latent.
   absence detection does not depend on the backend abstaining. Done (`min_support`).
 - Novelty decision rule: the standardised distance ranks novel cells well (AUROC 0.86 at the
   hard cell) but the 3-sd rule flags under a tenth of them. The withheld-state curve over
-  separation (`simulation.withheld_state`) and the `ood_rule` option are done; the PI chooses
-  the rule from the curve and predeclares it in `configs/thresholds.yaml`.
+  separation (`simulation.withheld_state`) chose the held-out 95th-percentile rule,
+  predeclared 2026-09-30 (`ood_score` centroid; the joint centroid + kNN score is the
+  amendment candidate). Done.
+- Calibrated novelty stack: kNN distance and joint scores from the held-out folds
+  (`ValidationResult.holdout_evidence`), per-state support threshold, per-state
+  `novel_population` threshold from held-out reference donors. Done.
 - Labels-only `Predictions` (no confidence) no longer read `insufficient` on every state:
   local support stands in for confidence, and without a latent the states are at most
   `supported_with_caution`. Done (`confidence_source`).
@@ -112,7 +116,8 @@ data with a shift diagnostic that does not depend on the mapper's latent.
 - [x] Benchmark scores shift evidence separately from status
 - [ ] Identity-loss status (PI decision)
 - [x] Local support in the tool's latent (`novelty.local_support`, `min_support`)
-- [x] Novelty decision rule from the withheld-state curve (`ood_rule`; curve in `simulation.withheld_state`; rule to be predeclared by the PI)
+- [x] Novelty decision rule from the withheld-state curve (`ood_rule`; curve in `simulation.withheld_state`; centroid q95 predeclared 2026-09-30)
+- [x] kNN novelty score, support calibration, joint score, calibrated population call (`ood_score`, `support_calibration`, `population_calibration`)
 - [x] Labels-only predictions path (`confidence_source`)
 - [ ] Full grid on Bridges-2 (`01_simulation/_h/02c.comparators.sh`, about 20 GPU-hours)
 - [ ] `00_gates/_m/G0.md`; tag v0.1.0
@@ -135,7 +140,8 @@ PYTHONPATH=. .venv/bin/python -m statetrace_benchmark.gates.check G0
 
 ### Promotion gate
 
-G0 (a), (b), (c) as predeclared, with shift evidence reported separately from status, on 3
+G0 (a), (b) in its two-arm form of 2026-09-30, (c) as predeclared, with shift evidence
+reported separately from status, on 3
 comparators x 5 scenarios x 5 seeds x 9 grid cells.
 
 ### Notes

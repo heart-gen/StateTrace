@@ -84,10 +84,25 @@ class KNNBackend:
         self._check_fitted()
         return np.asarray(self._model.predict_proba(self._prep(X)), dtype=np.float64)
 
+    def kneighbors(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Distances and training-row indices of the k nearest training cells, both shaped
+        (n, k). Distances are in the backend's metric space (Euclidean on unit vectors for
+        ``metric="cosine"``).
+        """
+        self._check_fitted()
+        dist, idx = self._model.kneighbors(self._prep(X), return_distance=True)
+        return np.asarray(dist, dtype=np.float32), np.asarray(idx)
+
+    def neighbor_codes(self, idx: np.ndarray) -> np.ndarray:
+        """Class codes (positions in ``classes_``) of training rows ``idx``."""
+        self._check_fitted()
+        return self._y_codes[idx]
+
     def neighbor_votes(self, X: np.ndarray) -> np.ndarray:
         """Integer count of the k nearest training cells per class, shape (n, n_classes)."""
         self._check_fitted()
-        idx = self._model.kneighbors(self._prep(X), return_distance=False)
+        _, idx = self.kneighbors(X)
         votes = np.zeros((idx.shape[0], len(self.classes_)), dtype=np.int32)
         rows = np.arange(idx.shape[0])
         for j in range(idx.shape[1]):

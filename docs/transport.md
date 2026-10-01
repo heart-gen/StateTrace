@@ -53,20 +53,27 @@ The two systems together separate four outcomes:
 
 `confidence` (from the backend), `margin`, `support`, `distance` and `novelty` (raw and
 standardised distance to the assigned state's reference centroid: how many reference
-standard deviations above the typical distance of that state's own cells; both need the query
-in the reference latent, after removing the estimated cohort offset) and `category`:
+standard deviations above the typical distance of that state's own cells), `knn_distance` and
+`knn_novelty` (raw and standardised distance to the k-th nearest reference cell),
+`joint_novelty` (the larger of the two standardised distances; all need the query in the
+reference latent, after removing the estimated cohort offset) and `category`:
 `out_of_reference` by the out-of-reference rule below, else `uncertain` when confidence is
-below `uncertain_below` or local support is below `min_support`, else `supported`. Labels the
-reference does not know are `unknown` and `out_of_reference`.
+below `uncertain_below` or local support is below the state's support threshold, else
+`supported`. Labels the reference does not know are `unknown` and `out_of_reference`.
 
-**Local reference support.** `support` is the fraction of a cell's `support_neighbors` (15)
-nearest *reference* cells, in the tool's latent, that carry the state the tool assigned. A
-tool that reports its own support (Symphony and Azimuth mapping scores, the kNN vote fraction)
-keeps it; otherwise StateTrace computes it whenever the query latent is available, so the
-judgement does not depend on the mapper abstaining or on how it scores confidence. A label
-whose neighbourhood is made of other states has no reference support: the cell is `uncertain`
-and does not count towards its donor observing the state, which is how a state absent from
-the query still reads `absent` under a mapper that labels every cell. `route.reference["support"]`
+**Local reference support.** `support` is the fraction of a cell's nearest *reference*
+cells, in the tool's latent, that carry the state the tool assigned (the reference's kNN
+backend supplies the neighbours when it is one; otherwise a cosine kNN with
+`support_neighbors`, 15). A tool that reports its own support (Symphony and Azimuth mapping
+scores) keeps it; otherwise StateTrace computes it whenever the query latent is available,
+so the judgement does not depend on the mapper abstaining or on how it scores confidence. A
+label whose neighbourhood is made of other states has no reference support: the cell is
+`uncertain` and does not count towards its donor observing the state, which is how a state
+absent from the query still reads `absent` under a mapper that labels every cell. The
+threshold is per state: with `support_calibration="holdout"` (default) it is the smaller of
+`min_support` (0.5) and the 5th percentile of the support that held-out reference cells of
+that state achieved in grouped validation, so a state whose own cells are mixed is not asked
+for more than it gives (`support_threshold` in the state table). `route.reference["support"]`
 records the source (`backend`, `latent_knn` or `none`).
 
 **Labels-only predictions.** When a tool gives labels but no confidence, local support stands
@@ -74,14 +81,34 @@ in for confidence (`confidence_source = "support"`, recorded per state and in
 `route.reference`). With neither confidence nor a latent, donor recovery is judged on counts
 alone, `confidence_source` is `none`, and every state is at most `supported_with_caution`.
 
-**Out-of-reference rule** (`ood_rule`). `"z"` (default) flags a cell whose standardised
-distance exceeds `ood_z` (3). `"quantile"` flags a cell whose raw distance exceeds the
-`ood_quantile` (0.95 or 0.99) of the held-out reference distances of its state, stored by
-grouped validation, so genuine cells of an intact state from a new donor are flagged at about
-the nominal rate; without a calibration the z rule is applied and
-`route.reference["ood_rule"]` says so. The benchmark's withheld-state curve
-(`statetrace_benchmark.simulation.withheld_state`) traces power and false rate of both rules
-over state separation; the rule used on real data is predeclared from it.
+**Out-of-reference rule** (`ood_score`, `ood_rule`). The score is the evidence:
+`"centroid"` (default; distance to the state's reference centroid), `"knn"` (distance to the
+k-th nearest reference cell, which sees a population that sits at a normal radius but in a
+different direction) or `"joint"` (the larger of the two standardised distances). The rule
+`"z"` (default) flags a cell whose standardised score exceeds `ood_z` (3); `"quantile"` flags
+a cell whose score exceeds the `ood_quantile` (0.95 or 0.99) of the held-out reference cells
+of its state, stored by grouped validation, so genuine cells of an intact state from a new
+donor are flagged at about the nominal rate. The kNN and joint scores and the quantile rule
+need that calibration; without it the centroid z rule is applied and
+`route.reference["ood_rule"]`, `["ood_score"]` and `["ood_fallback"]` say so. The
+benchmark's withheld-state curve (`statetrace_benchmark.simulation.withheld_state`) traces
+power and false rate of every score and rule over state separation; the rule used on real
+data is predeclared from it.
+
+**Held-out evidence.** Grouped validation stores, per reference cell, the three quantities
+measured against the training donors only (`ValidationResult.holdout_evidence`: centroid
+distance, kNN distance, support) and summarises them per state in
+`ValidationResult.distance_calibration` (mean, sd, 95th and 99th percentiles of both
+distances, quantiles of the joint score, 5th and 10th percentiles of support). Both travel
+with the frozen reference.
+
+**Population call** (`population_calibration`). A state carries `novel_population`, and
+counts as displaced in the status rule, when its out-of-reference fraction exceeds a
+threshold that is, per state, the larger of `population_floor` (0.1) and the largest
+fraction any held-out reference donor produced under the active rule (`ood_threshold` in the
+state table; `"fixed"` uses `max_ood_fraction`, 0.3, which also remains the per-donor
+recovery limit). The call therefore means "more than any reference donor showed, and at
+least one cell in ten".
 
 ## Per donor x state
 
@@ -99,12 +126,13 @@ least `min_confidence` when a confidence exists, out-of-reference fraction at mo
 | `groups_observed`, `groups_recovered`, `recovery_rate` | query donors observing and recovering the state |
 | `n_cells`, `n_cells_supported` | query cells assigned to the state, and those with local reference support |
 | `median_confidence`, `median_support`, `uncertain_fraction`, `ood_fraction` | over the query cells assigned to the state |
+| `support_threshold`, `ood_threshold` | the per-state support minimum and out-of-reference fraction limit in force (calibrated on held-out reference donors, or the fixed defaults) |
 | `confidence_source` | `backend`, `support` (local support stands in for a missing confidence) or `none` |
 | `shift`, `shift_level`, `shift_source` | the deciding shift, in reference sd units, and the coordinate system it came from (`expression` when the reference carries an expression space and the query has its genes, else `latent`): low (< 2) / moderate / high (>= 4) / unknown |
 | `expression_shift`, `expression_shift_level`, `groups_shifted`, `groups_scored_expression` | median over query donors of the donor x state pseudobulk distance standardised against held-out reference donors; donors at or above the high threshold, of donors with enough cells |
 | `latent_shift`, `latent_shift_level` | centroid shift in the mapping latent after cohort-offset removal, in per-dimension reference sd (secondary evidence) |
 | `n_cells_in_reference`, `groups_recovered_in_reference`, `shift_in_reference`, `expression_shift_in_reference`, `latent_shift_in_reference` | the same evidence restricted to cells that lie within the reference distribution |
-| `novel_population` | an out-of-reference population (above `max_ood_fraction`) sits next to the state |
+| `novel_population` | an out-of-reference population (above the state's `ood_threshold`) sits next to the state |
 | `query_recall` | only when query labels are given (benchmarks) |
 | `status` | the gating decision |
 
@@ -114,7 +142,7 @@ least `min_confidence` when a confidence exists, out-of-reference fraction at mo
 |---|---|
 | `absent` | fewer than `min_cells_total` (50) supported query cells or no donor observes it |
 | `insufficient` (reference) | reference reproducibility `fragile` or `insufficient` |
-| `shifted` | `shift_level` high (at least 4 reference sd in the deciding coordinate system) or `ood_fraction` above `max_ood_fraction` (0.3), unless the in-reference cells still recover the state in enough groups with low shift, in which case an out-of-reference population sits beside an intact state -> `supported_with_caution` with `novel_population` |
+| `shifted` | `shift_level` high (at least 4 reference sd in the deciding coordinate system) or `ood_fraction` above the state's `ood_threshold`, unless the in-reference cells still recover the state in enough groups with low shift, in which case an out-of-reference population sits beside an intact state -> `supported_with_caution` with `novel_population` |
 | `insufficient` (query) | fewer than `min_groups_recovered` (3) donors recover it |
 | `supported_with_caution` | reference reproducibility `moderate` or `unvalidated`, recovery rate below 0.8, uncertain fraction above 0.2, moderate shift, or no confidence evidence at all (`confidence_source` `none`) |
 | `supported` | otherwise |

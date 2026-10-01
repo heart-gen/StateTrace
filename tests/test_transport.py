@@ -27,7 +27,13 @@ def test_route_schema_and_statuses(validated_ref, transport_pair):
         schema.CELL_CATEGORIES
     )
     st = route.states
-    assert st.loc["S0", "status"] == "supported" and st.loc["S2", "status"] == "supported"
+    # S2 is intact; S0 is intact too but, at this seed, catches misassigned cells of the
+    # shifted S1, which the calibrated population call reports as an out-of-reference cloud
+    assert st.loc["S2", "status"] == "supported"
+    assert st.loc["S0", "status"] == "supported_with_caution" and st.loc["S0", "novel_population"]
+    s0 = route.cells[route.cells["state"] == "S0"]
+    assert (s0.loc[s0["true_state"] == "S0", "category"] == "supported").all()
+    assert (s0.loc[s0["true_state"] == "S1", "category"] == "out_of_reference").all()
     assert st.loc["S1", "status"] == "shifted" and st.loc["S1", "shift_level"] == "high"
     assert st.loc["S4", "status"] == "absent" and st.loc["S3", "status"] == "insufficient"
     assert (
@@ -36,11 +42,11 @@ def test_route_schema_and_statuses(validated_ref, transport_pair):
     )
     assert st.loc["S0", "groups_recovered"] == 6 and st.loc["S0", "query_groups"] == 6
     assert st.loc["S0", "query_recall"] > 0.9 and np.isnan(st.loc["S4", "query_recall"])
-    assert route.supported_states == ["S0", "S2"] and route.states_with(["shifted", "absent"]) == [
+    assert route.supported_states == ["S2"] and route.states_with(["shifted", "absent"]) == [
         "S1",
         "S4",
     ]
-    assert "supported=2" in route.summary()
+    assert "supported=1" in route.summary()
 
 
 def test_unvalidated_reference_gives_caution(transport_pair):
@@ -54,7 +60,7 @@ def test_unvalidated_reference_gives_caution(transport_pair):
     route2 = validate_transport(
         ref, qry, group_key="donor_id", config=TransportConfig(require_reference_validation=False)
     )
-    assert (route2.states.loc[["S0", "S2"], "status"] == "supported").all()
+    assert route2.states.loc["S2", "status"] == "supported"
 
 
 def test_novel_state_is_out_of_reference():
@@ -266,7 +272,7 @@ def test_labels_only_predictions(validated_ref, transport_pair):
     assert route.reference["confidence_source"] == "support"
     assert (route.states["confidence_source"] == "support").all()
     assert route.cells["confidence"].notna().all()
-    assert (route.states.loc[["S0", "S2"], "status"] == "supported").all()
+    assert route.states.loc["S2", "status"] == "supported"
     assert route.states.loc["S4", "status"] == "absent"
     # without a latent, recovery is judged on counts and every state is at most a caution
     q = qry.copy()
@@ -330,12 +336,12 @@ def test_outputs_and_report(validated_ref, transport_pair, tmp_path):
     _, qry, _ = transport_pair
     route = validate_transport(validated_ref, qry, group_key="donor_id")
     ab = route.state_abundance(states="supported")
-    assert list(ab.columns) == ["S0", "S2"] and ab.shape[0] == 6 and (ab.to_numpy() <= 1).all()
+    assert list(ab.columns) == ["S2"] and ab.shape[0] == 6 and (ab.to_numpy() <= 1).all()
     ab_all = route.state_abundance(normalize=False)
     assert ab_all.to_numpy().sum() == qry.n_obs
     pb = route.pseudobulk()
     assert (
-        set(pb.obs["state"]) == {"S0", "S2"}
+        set(pb.obs["state"]) == {"S2"}
         and pb.n_vars == qry.n_vars
         and (pb.obs["n_cells"] >= 10).all()
     )
@@ -393,4 +399,96 @@ def test_holdout_calibration_lowers_false_ood(transport_pair):
     f_hold = (r_hold.cells.loc[stable, "category"] == "out_of_reference").mean()
     f_in = (r_in.cells.loc[stable, "category"] == "out_of_reference").mean()
     assert f_hold <= f_in and f_hold < 0.05
-    assert (r_hold.states.loc[["S0", "S2"], "status"] == "supported").all()
+    assert r_hold.states.loc["S2", "status"] == "supported"
+
+
+def test_knn_and_joint_scores_and_calibrated_thresholds(transport_pair):
+    import warnings
+
+    ref_adata, qry, _ = transport_pair
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), **REF_KW).fit()
+        res = ref.leave_one_group_out()
+    cal = res.distance_calibration
+    for col in (
+        "knn_mean_holdout",
+        "knn_sd_holdout",
+        "knn_q95_holdout",
+        "joint_q95_holdout",
+        "support_q05_holdout",
+        "n_groups_holdout",
+    ):
+        assert col in cal and cal[col].notna().all()
+    ev = res.holdout_evidence
+    assert list(ev.columns) == ["group", "true_state", "distance", "knn_distance", "support"]
+    assert list(ev.index) == list(ref_adata.obs_names)
+    assert ev["support"].between(0, 1).all() and (ev["knn_distance"] > 0).all()
+    base = validate_transport(ref, qry, group_key="donor_id", query_state_key="cell_state")
+    cells = base.cells
+    assert cells["knn_distance"].notna().all() and cells["knn_novelty"].notna().all()
+    assert cells["joint_novelty"].notna().all()
+    assert (cells["joint_novelty"] >= cells["novelty"] - 1e-9).all()
+    assert base.reference["support_calibration"] == "holdout"
+    assert base.reference["population_calibration"] == "holdout"
+    assert (base.states["support_threshold"] <= 0.5).all()
+    # calibrated population threshold: at least the floor, and above max_ood_fraction only
+    # when a reference donor produced that much
+    assert (base.states["ood_threshold"] >= 0.1).all()
+    shifted = cells["true_state"] == "S1"
+    for score, rule, q in (
+        ("knn", "quantile", 0.95),
+        ("joint", "quantile", 0.95),
+        ("joint", "z", 0.99),
+    ):
+        r = validate_transport(
+            ref,
+            qry,
+            group_key="donor_id",
+            query_state_key="cell_state",
+            config=TransportConfig(ood_score=score, ood_rule=rule, ood_quantile=q),
+        )
+        assert r.reference["ood_score"] == score and r.reference["ood_rule"] == rule
+        assert not r.reference["ood_fallback"]
+        flagged = r.cells["category"] == "out_of_reference"
+        assert flagged[shifted].mean() > 0.9
+        assert flagged[r.cells["true_state"].isin(["S0", "S2"])].mean() < 0.1
+    # the joint quantile rule is exactly "joint score above the state's held-out quantile"
+    r = validate_transport(
+        ref,
+        qry,
+        group_key="donor_id",
+        config=TransportConfig(ood_score="joint", ood_rule="quantile", ood_quantile=0.99),
+    )
+    thr = r.cells["state"].map(cal["joint_q99_holdout"]).to_numpy(dtype=float)
+    known = r.cells["state"] != schema.UNKNOWN_LABEL
+    expect = r.cells["joint_novelty"].to_numpy(dtype=float) > thr
+    assert ((r.cells["category"] == "out_of_reference").to_numpy()[known] == expect[known]).all()
+    # without validation the knn and joint scores are unavailable and the call falls back
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bare = Reference(ref_adata.copy(), **REF_KW).fit()
+    r_bare = validate_transport(
+        bare,
+        qry,
+        group_key="donor_id",
+        config=TransportConfig(ood_score="joint", require_reference_validation=False),
+    )
+    assert r_bare.reference["ood_fallback"] and r_bare.reference["ood_score"] == "centroid"
+    assert r_bare.cells["knn_novelty"].isna().all()
+    assert r_bare.reference["support_calibration"] == "fixed"
+    assert r_bare.reference["population_calibration"] == "fixed"
+    assert (r_bare.states["ood_threshold"] == 0.3).all()
+    # fixed modes are honoured on a validated reference too
+    r_fixed = validate_transport(
+        ref,
+        qry,
+        group_key="donor_id",
+        config=TransportConfig(support_calibration="fixed", population_calibration="fixed"),
+    )
+    assert (r_fixed.states["support_threshold"] == 0.5).all()
+    assert (r_fixed.states["ood_threshold"] == 0.3).all()
+    with pytest.raises(ValueError, match="ood_score"):
+        TransportConfig(ood_score="nope")
+    with pytest.raises(ValueError, match="support_quantile"):
+        TransportConfig(support_quantile=0.5)

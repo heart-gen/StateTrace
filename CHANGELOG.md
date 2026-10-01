@@ -33,11 +33,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`confidence_source = "support"`); with neither confidence nor a latent, donor recovery is
   judged on counts and every state is at most `supported_with_caution`
   (`confidence_source = "none"`, new state column).
-- Out-of-reference rule `TransportConfig.ood_rule`: `"z"` (standardised distance above
-  `ood_z`, the previous behaviour) or `"quantile"` (raw distance above the held-out 95th or
-  99th percentile of the state, `ood_quantile`), with the applied rule in
-  `route.reference["ood_rule"]`; `cells` gains the raw `distance`. The benchmark's
-  withheld-state curve chooses the rule to predeclare.
+- Out-of-reference call `TransportConfig.ood_score` / `ood_rule`: the score is the centroid
+  distance (previous behaviour), the kNN distance to the k-th nearest reference cell, or the
+  joint score (the larger of the two standardised distances); the rule is `"z"` (above
+  `ood_z`) or `"quantile"` (above the held-out 95th or 99th percentile of the state,
+  `ood_quantile`). `cells` gains `distance`, `knn_distance`, `knn_novelty` and
+  `joint_novelty`; `route.reference` records the score and rule applied and any fallback.
+  The benchmark's withheld-state curve chooses the rule to predeclare.
+- Held-out evidence per reference cell from grouped validation
+  (`ValidationResult.holdout_evidence`: centroid distance, kNN distance and support against
+  the training donors only), with `distance_calibration` extended by kNN, joint and support
+  quantiles; both are written with the frozen reference.
+- Calibrated thresholds in `validate_transport`: per-state support minimum
+  (`support_calibration`, the smaller of `min_support` and the held-out 5th percentile) and
+  per-state out-of-reference fraction for the `novel_population` call
+  (`population_calibration`: the larger of `population_floor` and the largest fraction any
+  held-out reference donor produced); `support_threshold` and `ood_threshold` state columns.
 
 ### Changed
 - The built-in kNN path no longer attaches its vote fraction as `Predictions.support`; local

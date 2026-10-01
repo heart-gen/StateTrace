@@ -101,54 +101,59 @@ def reference_distance(
 
 
 OOD_RULES = ("z", "quantile")
+OOD_SCORES = ("centroid", "knn", "joint")
+EVIDENCE_COLUMNS = ("group", "true_state", "distance", "knn_distance", "support")
+_QUANTILE_COLUMNS = {0.95: "q95", 0.99: "q99"}
 
 
-def out_of_reference_mask(
-    distance: np.ndarray,
-    novelty: np.ndarray,
-    assigned_codes: np.ndarray,
+def neighbor_index(
+    reference_latent: np.ndarray,
+    reference_labels: np.ndarray,
     *,
-    rule: str = "z",
-    z: float = 3.0,
-    quantile: float = 0.99,
-    calibration: pd.DataFrame | None = None,
-    states: np.ndarray | list[str] | None = None,
-) -> tuple[np.ndarray, str]:
+    backend: Any = None,
+    n_neighbors: int = 15,
+    metric: str = "cosine",
+) -> Any:
     """
-    Decide which cells lie outside their assigned state's reference distribution.
-
-    ``rule="z"`` flags cells whose standardised reference distance exceeds ``z``.
-    ``rule="quantile"`` flags cells whose raw distance exceeds the ``quantile`` (0.95 or 0.99)
-    of the held-out distances of that state in ``calibration`` (see
-    :func:`holdout_distance_calibration`), so a genuinely new donor of an intact state is
-    flagged at about the nominal rate; states without a calibrated quantile fall back to the
-    z rule, and so does the whole call when no calibration exists.
-
-    Returns
-    -------
-    mask, rule_applied
-        Boolean mask and the rule that was actually applied (``"z"`` when the quantile rule
-        could not be).
+    The neighbour index used for local support and the kNN distance: the reference's own kNN
+    backend when it is one (its ``k`` and metric), else a
+    :class:`~statetrace.backends.knn.KNNBackend` fitted on the reference latent.
     """
-    if rule not in OOD_RULES:
-        raise ValueError(f"rule must be one of {OOD_RULES}, got {rule!r}")
-    nov = np.asarray(novelty, dtype=float)
-    z_mask = np.nan_to_num(nov, nan=0.0) > z
-    if rule == "z" or calibration is None or states is None:
-        return z_mask, "z"
-    col = {0.95: "q95_holdout", 0.99: "q99_holdout"}.get(float(quantile))
-    if col is None:
-        raise ValueError("quantile must be 0.95 or 0.99 (the levels stored with the reference)")
-    cal = calibration.reindex([str(s) for s in states])
-    q = cal[col].to_numpy(dtype=float)
+    from .backends.knn import KNNBackend
+
+    if (
+        backend is not None
+        and hasattr(backend, "kneighbors")
+        and hasattr(backend, "neighbor_codes")
+    ):
+        return backend
+    return KNNBackend(n_neighbors=n_neighbors, metric=metric).fit(
+        reference_latent, np.asarray(reference_labels).astype(str)
+    )
+
+
+def neighbor_evidence(
+    index: Any, X: np.ndarray, assigned_codes: np.ndarray, states: np.ndarray | list[str]
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Per cell of ``X``: local reference support (fraction of the k nearest reference cells in
+    ``index`` that carry the assigned state) and the kNN distance (distance to the k-th
+    nearest reference cell of any state, in the index's metric). Support is NaN for cells
+    without an assigned state.
+    """
     codes = np.asarray(assigned_codes)
-    dist = np.asarray(distance, dtype=float)
+    states = np.asarray(states).astype(str)
+    classes = np.asarray(index.classes_).astype(str)
+    lookup = {c: i for i, c in enumerate(classes)}
+    col = np.array([lookup.get(s_, -1) for s_ in states])
+    dist, idx = index.kneighbors(X)
+    ncodes = index.neighbor_codes(idx)
+    support = np.full(len(codes), np.nan)
     ok = codes >= 0
-    thr = np.full(len(codes), np.nan)
-    thr[ok] = q[codes[ok]]
-    has_q = np.isfinite(thr)
-    mask = np.where(has_q, np.nan_to_num(dist, nan=0.0) > thr, z_mask)
-    return mask, "quantile"
+    ok[ok] &= col[codes[ok]] >= 0
+    if ok.any():
+        support[ok] = (ncodes[ok] == col[codes[ok]][:, None]).mean(axis=1)
+    return support, np.asarray(dist[:, -1], dtype=float)
 
 
 def local_support(
@@ -163,35 +168,349 @@ def local_support(
     backend: Any = None,
 ) -> np.ndarray:
     """
-    Fraction of each query cell's ``n_neighbors`` nearest *reference* cells that carry the
-    state the cell was assigned, in the coordinate system of ``query_latent``.
-
-    This is StateTrace's own measure of local reference support, independent of whether the
-    mapping tool abstains or how it scores confidence: a label whose neighbourhood in the
-    tool's latent is made of other states has no reference support. ``backend`` may be an
-    already fitted object with ``neighbor_votes`` and ``classes_`` (the reference's kNN
-    backend, fitted on the state labels); otherwise a
-    :class:`~statetrace.backends.knn.KNNBackend` is fitted on the reference latent. NaN for
-    cells with no assigned state.
+    Fraction of each query cell's nearest *reference* cells that carry the state the cell was
+    assigned, in the coordinate system of ``query_latent``; see :func:`neighbor_evidence`.
     """
-    from .backends.knn import KNNBackend
+    index = neighbor_index(
+        reference_latent, reference_labels, backend=backend, n_neighbors=n_neighbors, metric=metric
+    )
+    return neighbor_evidence(index, query_latent, assigned_codes, states)[0]
 
-    codes = np.asarray(assigned_codes)
+
+def holdout_evidence(
+    latent: np.ndarray,
+    state_codes: np.ndarray,
+    group_labels: np.ndarray,
+    folds: list[tuple[str, np.ndarray]],
+    states: np.ndarray | list[str],
+    *,
+    index_template: Any = None,
+    n_neighbors: int = 15,
+    metric: str = "cosine",
+) -> pd.DataFrame:
+    """
+    Per held-out cell, the three novelty quantities measured against the *training* folds
+    only: distance to the centroid of its true state, kNN distance to the k-th nearest
+    training cell, and local support (fraction of the k nearest training cells carrying its
+    true state). These carry the effect of an unseen group (donor), so they are the null
+    against which query cells are judged. One row per cell in the order of ``folds``.
+    """
     states = np.asarray(states).astype(str)
-    if backend is None or not hasattr(backend, "neighbor_votes"):
-        backend = KNNBackend(n_neighbors=n_neighbors, metric=metric).fit(
-            reference_latent, np.asarray(reference_labels).astype(str)
+    labels = states[state_codes]
+    n_states = len(states)
+    rows: list[pd.DataFrame] = []
+    for _, test in folds:
+        train = ~test
+        centroids, _ = state_geometry(latent[train], state_codes[train], n_states)
+        present = np.bincount(state_codes[train], minlength=n_states) > 0
+        codes = state_codes[test]
+        dist = raw_distance(latent[test], np.where(present[codes], codes, -1), centroids)
+        template = index_template.clone() if hasattr(index_template, "clone") else None
+        index = neighbor_index(
+            latent[train],
+            labels[train],
+            backend=template.fit(latent[train], labels[train]) if template is not None else None,
+            n_neighbors=n_neighbors,
+            metric=metric,
         )
-    classes = np.asarray(backend.classes_).astype(str)
-    lookup = {c: i for i, c in enumerate(classes)}
-    col = np.array([lookup.get(s, -1) for s in states])
-    votes = backend.neighbor_votes(query_latent)
+        support, knn = neighbor_evidence(index, latent[test], codes, states)
+        rows.append(
+            pd.DataFrame(
+                {
+                    "group": np.asarray(group_labels)[test].astype(str),
+                    "true_state": labels[test],
+                    "distance": dist,
+                    "knn_distance": knn,
+                    "support": support,
+                }
+            )
+        )
+    return pd.concat(rows, ignore_index=True)[list(EVIDENCE_COLUMNS)]
+
+
+def _q(x: np.ndarray, q: float) -> float:
+    return float(np.quantile(x, q)) if x.size else np.nan
+
+
+def holdout_distance_calibration(
+    evidence: pd.DataFrame, geometry: np.ndarray, states: np.ndarray | list[str]
+) -> pd.DataFrame:
+    """
+    Per-state statistics of the held-out evidence from :func:`holdout_evidence`: mean, sd and
+    95th / 99th percentiles of the centroid distance and of the kNN distance; quantiles of the
+    joint score (the larger of the two standardised distances); and the 5th / 10th percentiles
+    and median of local support. ``mean_in_sample`` / ``sd_in_sample`` from ``geometry`` are
+    kept for comparison. Unlike in-sample statistics these include the effect of an unseen
+    group, so standardising query cells against them gives an out-of-reference rate close to
+    the nominal one for genuinely new donors.
+    """
+    rows = []
+    for k, s_ in enumerate(np.asarray(states).astype(str)):
+        e = evidence[evidence["true_state"].astype(str) == s_]
+        d = e["distance"].to_numpy(dtype=float)
+        d = d[np.isfinite(d)]
+        kd = e["knn_distance"].to_numpy(dtype=float)
+        kd = kd[np.isfinite(kd)]
+        sup = e["support"].to_numpy(dtype=float)
+        sup = sup[np.isfinite(sup)]
+        mean, sd = (float(d.mean()), float(d.std(ddof=1))) if d.size > 1 else (np.nan, np.nan)
+        kmean, ksd = (float(kd.mean()), float(kd.std(ddof=1))) if kd.size > 1 else (np.nan, np.nan)
+        both = np.isfinite(e["distance"].to_numpy(dtype=float)) & np.isfinite(
+            e["knn_distance"].to_numpy(dtype=float)
+        )
+        if both.any() and sd > 0 and ksd > 0:
+            zc = (e.loc[both, "distance"].to_numpy(dtype=float) - mean) / sd
+            zk = (e.loc[both, "knn_distance"].to_numpy(dtype=float) - kmean) / ksd
+            joint = np.maximum(zc, zk)
+        else:
+            joint = np.array([])
+        rows.append(
+            {
+                "state": s_,
+                "n_holdout": int(d.size),
+                "n_groups_holdout": int(e["group"].nunique()),
+                "mean_holdout": mean,
+                "sd_holdout": sd,
+                "q95_holdout": _q(d, 0.95),
+                "q99_holdout": _q(d, 0.99),
+                "mean_in_sample": float(geometry[k, 1]),
+                "sd_in_sample": float(geometry[k, 2]),
+                "knn_mean_holdout": kmean,
+                "knn_sd_holdout": ksd,
+                "knn_q95_holdout": _q(kd, 0.95),
+                "knn_q99_holdout": _q(kd, 0.99),
+                "joint_q95_holdout": _q(joint, 0.95),
+                "joint_q99_holdout": _q(joint, 0.99),
+                "support_q05_holdout": _q(sup, 0.05),
+                "support_q10_holdout": _q(sup, 0.10),
+                "support_median_holdout": _q(sup, 0.5),
+            }
+        )
+    return pd.DataFrame(rows).set_index("state")
+
+
+def calibrated_geometry(
+    geometry: np.ndarray, calibration: pd.DataFrame | None, states: np.ndarray | list[str]
+) -> np.ndarray:
+    """
+    Geometry array for :func:`reference_distance`: in-sample RMS radius in column 0 (the shift
+    unit) and held-out mean / sd in columns 1-2 where available, in-sample otherwise.
+    """
+    out = np.array(geometry, dtype=np.float32, copy=True)
+    if calibration is None:
+        return out
+    cal = calibration.reindex([str(s) for s in states])
+    ok = cal["sd_holdout"].notna().to_numpy() & (cal["sd_holdout"].to_numpy() > 0)
+    out[ok, 1] = cal.loc[ok, "mean_holdout"].to_numpy()
+    out[ok, 2] = cal.loc[ok, "sd_holdout"].to_numpy()
+    return out
+
+
+def _per_state(
+    calibration: pd.DataFrame | None, states: np.ndarray | list[str], column: str
+) -> np.ndarray:
+    n = len(states)
+    if calibration is None or column not in calibration:
+        return np.full(n, np.nan)
+    return calibration.reindex([str(s) for s in states])[column].to_numpy(dtype=float)
+
+
+def knn_novelty(
+    knn_distance: np.ndarray,
+    assigned_codes: np.ndarray,
+    calibration: pd.DataFrame | None,
+    states: np.ndarray | list[str],
+) -> np.ndarray:
+    """kNN distance standardised against the held-out kNN distances of the assigned state (NaN without calibration)."""
+    codes = np.asarray(assigned_codes)
+    mean = _per_state(calibration, states, "knn_mean_holdout")
+    sd = _per_state(calibration, states, "knn_sd_holdout")
     out = np.full(len(codes), np.nan)
     ok = codes >= 0
-    ok[ok] &= col[codes[ok]] >= 0
-    if ok.any():
-        total = votes[ok].sum(axis=1).clip(min=1)
-        out[ok] = votes[ok, col[codes[ok]]] / total
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = (np.asarray(knn_distance, dtype=float)[ok] - mean[codes[ok]]) / sd[codes[ok]]
+    out[ok] = np.where(sd[codes[ok]] > 0, z, np.nan)
+    return out
+
+
+def joint_novelty(novelty: np.ndarray, knn_nov: np.ndarray) -> np.ndarray:
+    """The larger of the standardised centroid and kNN distances (NaN when either is missing)."""
+    a = np.asarray(novelty, dtype=float)
+    b = np.asarray(knn_nov, dtype=float)
+    out = np.maximum(a, b)
+    out[~(np.isfinite(a) & np.isfinite(b))] = np.nan
+    return out
+
+
+def out_of_reference_mask(
+    distance: np.ndarray,
+    novelty: np.ndarray,
+    assigned_codes: np.ndarray,
+    *,
+    rule: str = "z",
+    z: float = 3.0,
+    quantile: float = 0.99,
+    calibration: pd.DataFrame | None = None,
+    states: np.ndarray | list[str] | None = None,
+    score: str = "centroid",
+    knn_distance: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """
+    Decide which cells lie outside their assigned state's reference distribution.
+
+    ``score`` picks the evidence: ``"centroid"`` (distance to the state centroid), ``"knn"``
+    (distance to the k-th nearest reference cell) or ``"joint"`` (the larger of the two
+    standardised distances). ``rule="z"`` flags cells whose standardised score exceeds ``z``;
+    ``rule="quantile"`` flags cells whose score exceeds the ``quantile`` (0.95 or 0.99) of the
+    held-out reference cells of that state (raw distance for the centroid and kNN scores, the
+    joint statistic itself for ``"joint"``), so a genuinely new donor of an intact state is
+    flagged at about the nominal rate. Cells or states for which the chosen calibration is
+    missing fall back to the centroid z rule, and so does the whole call when no calibration
+    exists; the second return value records what was applied.
+    """
+    if rule not in OOD_RULES:
+        raise ValueError(f"rule must be one of {OOD_RULES}, got {rule!r}")
+    if score not in OOD_SCORES:
+        raise ValueError(f"score must be one of {OOD_SCORES}, got {score!r}")
+    nov = np.asarray(novelty, dtype=float)
+    codes = np.asarray(assigned_codes)
+    z_mask = np.nan_to_num(nov, nan=0.0) > z
+    applied = {"score": "centroid", "rule": "z", "fallback": False}
+    if score == "centroid" and rule == "z":
+        return z_mask, applied
+    if calibration is None or states is None:
+        applied["fallback"] = True
+        return z_mask, applied
+    qname = _QUANTILE_COLUMNS.get(float(quantile))
+    if qname is None:
+        raise ValueError("quantile must be 0.95 or 0.99 (the levels stored with the reference)")
+    ok = codes >= 0
+    if score == "centroid":
+        value = np.asarray(distance, dtype=float)
+        thr_state = _per_state(calibration, states, f"{qname}_holdout")
+    elif score == "knn":
+        if knn_distance is None:
+            applied["fallback"] = True
+            return z_mask, applied
+        knn_z = knn_novelty(knn_distance, codes, calibration, states)
+        value = knn_z if rule == "z" else np.asarray(knn_distance, dtype=float)
+        thr_state = (
+            np.full(len(states), float(z))
+            if rule == "z"
+            else _per_state(calibration, states, f"knn_{qname}_holdout")
+        )
+    else:
+        if knn_distance is None:
+            applied["fallback"] = True
+            return z_mask, applied
+        value = joint_novelty(nov, knn_novelty(knn_distance, codes, calibration, states))
+        thr_state = (
+            np.full(len(states), float(z))
+            if rule == "z"
+            else _per_state(calibration, states, f"joint_{qname}_holdout")
+        )
+    if rule == "z" and score == "centroid":  # pragma: no cover - handled above
+        thr_state = np.full(len(states), float(z))
+    thr = np.full(len(codes), np.nan)
+    thr[ok] = thr_state[codes[ok]]
+    has = np.isfinite(thr) & np.isfinite(value)
+    mask = np.where(has, np.nan_to_num(value, nan=0.0) > thr, z_mask)
+    applied.update({"score": score, "rule": rule, "fallback": bool((~has & ok).any())})
+    return mask, applied
+
+
+def support_thresholds(
+    calibration: pd.DataFrame | None,
+    states: np.ndarray | list[str],
+    *,
+    quantile: float = 0.05,
+    default: float | None = 0.5,
+) -> np.ndarray:
+    """
+    Per-state minimum local support: the ``quantile`` (0.05 or 0.10) of the support that
+    held-out reference cells of the state achieved; ``default`` where no calibration exists
+    (NaN disables the rule for that state). :func:`statetrace.validate_transport` caps the
+    result at its fixed ``min_support``, so calibration relaxes the rule for states whose own
+    cells are mixed and never tightens it.
+    """
+    col = {0.05: "support_q05_holdout", 0.10: "support_q10_holdout"}.get(float(quantile))
+    if col is None:
+        raise ValueError("support quantile must be 0.05 or 0.10")
+    thr = _per_state(calibration, states, col)
+    fill = np.nan if default is None else float(default)
+    return np.where(np.isfinite(thr), thr, fill)
+
+
+def population_thresholds(
+    evidence: pd.DataFrame | None,
+    calibration: pd.DataFrame | None,
+    states: np.ndarray | list[str],
+    *,
+    score: str,
+    rule: str,
+    z: float,
+    quantile: float,
+    min_cells: int = 20,
+    min_groups: int = 3,
+    population_quantile: float = 1.0,
+    default: float = 0.3,
+) -> np.ndarray:
+    """
+    Per-state out-of-reference fraction above which a query population is called novel:
+    the ``population_quantile`` over held-out reference donors (with at least ``min_cells``
+    cells of the state) of the fraction of their cells the active rule flags. With the
+    default 1.0 the threshold is the largest fraction any reference donor produced.
+    ``default`` where fewer than ``min_groups`` donors can be scored.
+    """
+    states = np.asarray(states).astype(str)
+    out = np.full(len(states), float(default))
+    if evidence is None or calibration is None or len(evidence) == 0:
+        return out
+    e = evidence
+    codes = pd.Index(states).get_indexer(e["true_state"].astype(str))
+    mask, _ = out_of_reference_mask(
+        e["distance"].to_numpy(dtype=float),
+        reference_distance_from_calibration(
+            e["distance"].to_numpy(dtype=float), codes, calibration, states
+        ),
+        codes,
+        rule=rule,
+        z=z,
+        quantile=quantile,
+        calibration=calibration,
+        states=states,
+        score=score,
+        knn_distance=e["knn_distance"].to_numpy(dtype=float),
+    )
+    frac = (
+        pd.DataFrame({"group": e["group"].astype(str), "code": codes, "flag": mask})
+        .groupby(["code", "group"])
+        .agg(n=("flag", "size"), frac=("flag", "mean"))
+        .reset_index()
+    )
+    frac = frac[frac["n"] >= min_cells]
+    for k in range(len(states)):
+        f = frac.loc[frac["code"] == k, "frac"].to_numpy(dtype=float)
+        if f.size >= min_groups:
+            out[k] = float(np.quantile(f, population_quantile))
+    return out
+
+
+def reference_distance_from_calibration(
+    distance: np.ndarray,
+    assigned_codes: np.ndarray,
+    calibration: pd.DataFrame | None,
+    states: np.ndarray | list[str],
+) -> np.ndarray:
+    """Standardise raw centroid distances with the held-out mean / sd of the assigned state."""
+    codes = np.asarray(assigned_codes)
+    mean = _per_state(calibration, states, "mean_holdout")
+    sd = _per_state(calibration, states, "sd_holdout")
+    out = np.full(len(codes), np.nan)
+    ok = codes >= 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = (np.asarray(distance, dtype=float)[ok] - mean[codes[ok]]) / sd[codes[ok]]
+    out[ok] = np.where(sd[codes[ok]] > 0, z, np.nan)
     return out
 
 
@@ -258,67 +577,3 @@ def shift_level(shift: np.ndarray | pd.Series, *, moderate: float, high: float) 
     lvl[np.isfinite(s) & (s >= high)] = "high"
     assert set(lvl) <= set(schema.SHIFT_LEVELS)
     return lvl
-
-
-def holdout_distance_calibration(
-    latent: np.ndarray,
-    state_codes: np.ndarray,
-    folds: list[tuple[str, np.ndarray]],
-    n_states: int,
-    states: np.ndarray | list[str],
-) -> pd.DataFrame:
-    """
-    Per-state distance statistics of *held-out* cells to centroids built from the training
-    folds only. Unlike :func:`state_geometry`, these include the effect of an unseen group
-    (donor), so standardising query distances against them gives an out-of-reference rate
-    close to the nominal one for genuinely new donors.
-
-    Returns
-    -------
-    DataFrame indexed by state with ``n_holdout``, ``mean_holdout``, ``sd_holdout``,
-    ``q95_holdout``, ``q99_holdout`` and, for comparison, ``mean_in_sample``, ``sd_in_sample``.
-    """
-    dists: list[list[float]] = [[] for _ in range(n_states)]
-    for _, test in folds:
-        train = ~test
-        for k in range(n_states):
-            tr = train & (state_codes == k)
-            te = test & (state_codes == k)
-            if tr.sum() < 2 or not te.any():
-                continue
-            c = latent[tr].mean(axis=0)
-            dists[k].extend(np.sqrt(((latent[te] - c) ** 2).sum(axis=1)).tolist())
-    _, geom = state_geometry(latent, state_codes, n_states)
-    rows = []
-    for k, s_ in enumerate(states):
-        d = np.asarray(dists[k], dtype=float)
-        rows.append(
-            {
-                "state": str(s_),
-                "n_holdout": int(d.size),
-                "mean_holdout": float(d.mean()) if d.size else np.nan,
-                "sd_holdout": float(d.std(ddof=1)) if d.size > 1 else np.nan,
-                "q95_holdout": float(np.quantile(d, 0.95)) if d.size else np.nan,
-                "q99_holdout": float(np.quantile(d, 0.99)) if d.size else np.nan,
-                "mean_in_sample": float(geom[k, 1]),
-                "sd_in_sample": float(geom[k, 2]),
-            }
-        )
-    return pd.DataFrame(rows).set_index("state")
-
-
-def calibrated_geometry(
-    geometry: np.ndarray, calibration: pd.DataFrame | None, states: np.ndarray | list[str]
-) -> np.ndarray:
-    """
-    Geometry array for :func:`reference_distance`: in-sample RMS radius in column 0 (the shift
-    unit) and held-out mean / sd in columns 1-2 where available, in-sample otherwise.
-    """
-    out = np.array(geometry, dtype=np.float32, copy=True)
-    if calibration is None:
-        return out
-    cal = calibration.reindex([str(s) for s in states])
-    ok = cal["sd_holdout"].notna().to_numpy() & (cal["sd_holdout"].to_numpy() > 0)
-    out[ok, 1] = cal.loc[ok, "mean_holdout"].to_numpy()
-    out[ok, 2] = cal.loc[ok, "sd_holdout"].to_numpy()
-    return out

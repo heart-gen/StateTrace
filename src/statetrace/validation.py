@@ -134,6 +134,7 @@ class ValidationResult:
     created: str
     statetrace_version: str
     distance_calibration: pd.DataFrame | None = None
+    holdout_evidence: pd.DataFrame | None = None
 
     # donor-flavoured aliases for the common case
     @property
@@ -212,6 +213,8 @@ class ValidationResult:
         self.confusion_matrix.to_csv(path / "confusion_matrix.csv")
         if self.distance_calibration is not None:
             self.distance_calibration.to_csv(path / "distance_calibration.csv")
+        if self.holdout_evidence is not None:
+            self.holdout_evidence.to_csv(path / "holdout_evidence.csv.gz", index_label="cell")
         if include_cell_predictions:
             self.cell_predictions.to_csv(path / "cell_predictions.csv.gz", index_label="cell")
         if self.per_group_confusion:
@@ -248,6 +251,13 @@ class ValidationResult:
         if cal_file.exists():
             calibration = pd.read_csv(cal_file, index_col="state")
             calibration.index = calibration.index.astype(str)
+        ev_file = path / "holdout_evidence.csv.gz"
+        evidence = None
+        if ev_file.exists():
+            evidence = pd.read_csv(
+                ev_file, index_col="cell", dtype={"group": str, "true_state": str}
+            )
+            evidence.index = evidence.index.astype(str)
         per_group: dict[str, pd.DataFrame] | None = None
         pdc = path / "per_group_confusion"
         if pdc.is_dir():
@@ -272,6 +282,7 @@ class ValidationResult:
             created=meta["created"],
             statetrace_version=meta["statetrace_version"],
             distance_calibration=calibration,
+            holdout_evidence=evidence,
         )
 
 
@@ -559,10 +570,20 @@ def run_validation(
     cp.index = pd.Index(idx.astype(str), name="cell")
     cp = cp.reindex(np.asarray(obs_names).astype(str))
     calibration = None
+    evidence = None
     if X is not None and method != "random_split":
-        calibration = novelty.holdout_distance_calibration(
-            X, state_codes, folds, len(states), states
+        evidence = novelty.holdout_evidence(
+            X,
+            state_codes,
+            groups,
+            folds,
+            states,
+            index_template=backend if is_array else None,
         )
+        evidence.index = pd.Index(idx.astype(str), name="cell")
+        evidence = evidence.reindex(np.asarray(obs_names).astype(str))
+        _, geometry = novelty.state_geometry(X, state_codes, len(states))
+        calibration = novelty.holdout_distance_calibration(evidence, geometry, states)
     result = summarize_holdout(
         cp,
         states=states,
@@ -577,4 +598,5 @@ def run_validation(
         latent={**latent_provenance, "refit_latent": False},
     )
     result.distance_calibration = calibration
+    result.holdout_evidence = evidence
     return result
