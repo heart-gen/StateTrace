@@ -321,3 +321,4 @@ stages run.
 | 2026-09-29 | 1 | scANVI and scPoli adapters; G0 smoke on two seeds; blocker recorded | `76e2cc7` | `d39fa44` | `reports/2026-09-29_g0_comparators_smoke.md` |
 | 2026-09-29 | 1 | Frozen expression space; two coordinate systems; simulator corrected | `7f48316` | | 90 tests, docs |
 | 2026-09-29 | 1 | Per-donor offset removal; G0 rerun: shift called by the expression space for both mappers, none by their latents | `841f1dc` | `22d01a9` | `reports/2026-09-29_g0_shift_rerun.md` |
+| 2026-09-30 | 1 | Local reference support, labels-only path, quantile out-of-reference rule; withheld-state curve (kNN) recommends the held-out 95th percentile | `1e0ea45` | `7e4f152` | `reports/2026-09-30_withheld_state_curve_knn.md` |
