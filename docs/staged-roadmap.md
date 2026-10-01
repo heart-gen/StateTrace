@@ -119,7 +119,8 @@ data with a shift diagnostic that does not depend on the mapper's latent.
 - [x] Novelty decision rule from the withheld-state curve (`ood_rule`; curve in `simulation.withheld_state`; centroid q95 predeclared 2026-09-30)
 - [x] kNN novelty score, support calibration, joint score, calibrated population call (`ood_score`, `support_calibration`, `population_calibration`)
 - [x] Labels-only predictions path (`confidence_source`)
-- [ ] Full grid: 450 comparator cells plus the withheld-state curve with the mappers, running on the local TITAN RTX since 2026-09-30 21:07 (`01_simulation/_h/local_grid.sh`, 3 workers, resumable); Bridges-2 (`run_stage.sh`) is the fallback, not a prerequisite
+- [x] Full grid, first run: 450 comparator cells plus the withheld-state curve with the mappers on the local TITAN RTX (2026-09-30 21:07 to 2026-10-01 07:22, `01_simulation/_h/local_grid.sh`); G0 failed, see the milestone log
+- [ ] Full grid, rerun after the per-donor latent offset fix and the expression-arm amendment (local, same runner); Bridges-2 (`run_stage.sh`) is the fallback, not a prerequisite
 - [ ] `00_gates/_m/G0.md` (written by `gates.evaluate` at the end of the local run); tag v0.1.0 at the SHA that passed; build the wheel Bridges-2 installs from
 
 ### Commands
@@ -329,3 +330,5 @@ stages run.
 | 2026-09-29 | 1 | Per-donor offset removal; G0 rerun: shift called by the expression space for both mappers, none by their latents | `841f1dc` | `22d01a9` | `reports/2026-09-29_g0_shift_rerun.md` |
 | 2026-09-30 | 1 | Local reference support, labels-only path, quantile out-of-reference rule; withheld-state curve (kNN) recommends the held-out 95th percentile | `1e0ea45` | `7e4f152` | `reports/2026-09-30_withheld_state_curve_knn.md` |
 | 2026-09-30 | 1 | kNN and joint novelty scores, calibrated support and population thresholds; centroid q95 predeclared by the PI; G0 (b) re-specified as two arms | `cd3c8f1` | `dbbcda3` | `reports/2026-09-30_withheld_state_curve_knn.md` (addendum), `configs/thresholds.yaml` |
+| 2026-10-01 | 1 | First full stage-01 run on the local GPU (510 cells): G0 FAIL on easy-cell accuracy (0.3 points), the false rate in mapper latents (0.11 vs 0.05) and the expression arm as predeclared; latent-arm power and truth-category recovery pass | `be57889` | `8352c8a` | `00_gates/_m/G0.md` (first run) |
+| 2026-10-01 | 1 | Per-donor latent offsets for query and null (surgery places each query donor with its own displacement); expression arm amended to a discrimination criterion, recorded in `GATES.md`; rerun launched | `f1b2c65` | `833c470` | `GATES.md` Amendments |
