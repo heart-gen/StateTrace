@@ -572,6 +572,8 @@ def run_validation(
     calibration = None
     evidence = None
     if X is not None and method != "random_split":
+        predicted = cp["predicted_state"].to_numpy().astype(str)
+        assigned = pd.Index(states).get_indexer(predicted)  # -1 for unknown / abstained
         evidence = novelty.holdout_evidence(
             X,
             state_codes,
@@ -580,6 +582,7 @@ def run_validation(
             states,
             index_template=backend if is_array else None,
             min_cells=config.min_group_cells,
+            assigned_codes=assigned,
         )
         evidence.index = pd.Index(idx.astype(str), name="cell")
         evidence = evidence.reindex(np.asarray(obs_names).astype(str))

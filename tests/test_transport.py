@@ -425,7 +425,14 @@ def test_knn_and_joint_scores_and_calibrated_thresholds(transport_pair):
     ):
         assert col in cal and cal[col].notna().all()
     ev = res.holdout_evidence
-    assert list(ev.columns) == ["group", "true_state", "distance", "knn_distance", "support"]
+    assert list(ev.columns) == [
+        "group",
+        "true_state",
+        "assigned_state",
+        "distance",
+        "knn_distance",
+        "support",
+    ]
     assert list(ev.index) == list(ref_adata.obs_names)
     assert ev["support"].between(0, 1).all() and (ev["knn_distance"] > 0).all()
     base = validate_transport(ref, qry, group_key="donor_id", query_state_key="cell_state")

@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out-of-reference rate in the scANVI and scPoli latents to 0.10 to 0.16 against a nominal
   0.05 while the kNN latent sat at 0.04. `route.reference["latent_offset"]` reports the
   mode, the donors with their own offset and the offset size in per-dimension reference sd.
+- The held-out null is assembled from the held-out *predicted* labels of grouped validation
+  (`holdout_evidence` gains `assigned_state`; the calibration groups by it), not from the
+  true labels. Query cells are judged by their assigned state, and cells assigned to a state
+  are the ones nearest its centroid, so a true-label null under-estimated each held-out
+  donor's offset relative to the query and sat too tight: on the simulation grid the
+  predeclared rule's false rate in the kNN latent rose with donor effect to 0.25 before this
+  change.
 
 ### Changed
 - The built-in kNN path no longer attaches its vote fraction as `Predictions.support`; local

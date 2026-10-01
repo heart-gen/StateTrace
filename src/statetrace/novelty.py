@@ -147,7 +147,7 @@ def reference_distance(
 
 OOD_RULES = ("z", "quantile")
 OOD_SCORES = ("centroid", "knn", "joint")
-EVIDENCE_COLUMNS = ("group", "true_state", "distance", "knn_distance", "support")
+EVIDENCE_COLUMNS = ("group", "true_state", "assigned_state", "distance", "knn_distance", "support")
 _QUANTILE_COLUMNS = {0.95: "q95", 0.99: "q99"}
 
 
@@ -235,41 +235,50 @@ def holdout_evidence(
     group_offset: bool = True,
     min_cells: int = 20,
     min_states: int = 3,
+    assigned_codes: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Per held-out cell, the three novelty quantities measured against the *training* folds
-    only: distance to the centroid of its true state, kNN distance to the k-th nearest
+    only: distance to the centroid of its assigned state, kNN distance to the k-th nearest
     training cell, and local support (fraction of the k nearest training cells carrying its
-    true state). These carry the effect of an unseen group (donor), so they are the null
-    against which query cells are judged. With ``group_offset`` each held-out group's own
-    latent offset (:func:`estimate_group_offsets`, true states, training centroids) is
-    removed first, exactly as :func:`statetrace.validate_transport` removes a query donor's,
-    so the null and the query are measured the same way. One row per cell in the order of
-    ``folds``.
+    assigned state). These carry the effect of an unseen group (donor), so they are the null
+    against which query cells are judged.
+
+    ``assigned_codes`` are the held-out *predictions* of grouped validation (``-1`` for
+    abstentions); the true states are used when they are not given. Query cells are judged
+    by their assigned state, and cells assigned to a state are the ones nearest its centroid,
+    so a null built from true states would under-estimate each held-out donor's offset
+    relative to the query and sit too tight; the null must be assembled the way the query is.
+    With ``group_offset`` each held-out group's own latent offset
+    (:func:`estimate_group_offsets`, assigned states, training centroids) is removed first,
+    exactly as :func:`statetrace.validate_transport` removes a query donor's. One row per
+    cell in the order of ``folds``.
     """
     states = np.asarray(states).astype(str)
     labels = states[state_codes]
     n_states = len(states)
     group_labels = np.asarray(group_labels).astype(str)
+    assigned_all = np.asarray(state_codes) if assigned_codes is None else np.asarray(assigned_codes)
     rows: list[pd.DataFrame] = []
     for _, test in folds:
         train = ~test
         centroids, _ = state_geometry(latent[train], state_codes[train], n_states)
         present = np.bincount(state_codes[train], minlength=n_states) > 0
-        codes = state_codes[test]
+        codes = assigned_all[test]
+        codes = np.where((codes >= 0) & present[np.clip(codes, 0, n_states - 1)], codes, -1)
         Zt = latent[test]
         if group_offset:
             gcodes = pd.factorize(group_labels[test], sort=True)[0]
             offsets, _ = estimate_group_offsets(
                 Zt,
                 gcodes,
-                np.where(present[codes], codes, -1),
+                codes,
                 centroids,
                 min_cells=min_cells,
                 min_states=min_states,
             )
             Zt = Zt - offsets[gcodes]
-        dist = raw_distance(Zt, np.where(present[codes], codes, -1), centroids)
+        dist = raw_distance(Zt, codes, centroids)
         template = index_template.clone() if hasattr(index_template, "clone") else None
         index = neighbor_index(
             latent[train],
@@ -284,6 +293,9 @@ def holdout_evidence(
                 {
                     "group": np.asarray(group_labels)[test].astype(str),
                     "true_state": labels[test],
+                    "assigned_state": np.where(
+                        codes >= 0, states[np.clip(codes, 0, n_states - 1)], schema.UNKNOWN_LABEL
+                    ),
                     "distance": dist,
                     "knn_distance": knn,
                     "support": support,
@@ -310,8 +322,9 @@ def holdout_distance_calibration(
     the nominal one for genuinely new donors.
     """
     rows = []
+    by = "assigned_state" if "assigned_state" in evidence else "true_state"
     for k, s_ in enumerate(np.asarray(states).astype(str)):
-        e = evidence[evidence["true_state"].astype(str) == s_]
+        e = evidence[evidence[by].astype(str) == s_]
         d = e["distance"].to_numpy(dtype=float)
         d = d[np.isfinite(d)]
         kd = e["knn_distance"].to_numpy(dtype=float)
@@ -532,7 +545,8 @@ def population_thresholds(
     if evidence is None or calibration is None or len(evidence) == 0:
         return out
     e = evidence
-    codes = pd.Index(states).get_indexer(e["true_state"].astype(str))
+    by = "assigned_state" if "assigned_state" in e else "true_state"
+    codes = pd.Index(states).get_indexer(e[by].astype(str))
     mask, _ = out_of_reference_mask(
         e["distance"].to_numpy(dtype=float),
         reference_distance_from_calibration(
