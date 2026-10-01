@@ -579,6 +579,7 @@ def run_validation(
             folds,
             states,
             index_template=backend if is_array else None,
+            min_cells=config.min_group_cells,
         )
         evidence.index = pd.Index(idx.astype(str), name="cell")
         evidence = evidence.reindex(np.asarray(obs_names).astype(str))

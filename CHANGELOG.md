@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`population_calibration`: the larger of `population_floor` and the largest fraction any
   held-out reference donor produced); `support_threshold` and `ood_threshold` state columns.
 
+- Per-donor latent offsets (`TransportConfig.latent_group_offset`, default on): each query
+  donor's own offset (median over its states of the displacement of its state means from
+  the reference centroids) is removed before the distance, novelty and latent-shift
+  diagnostics, and the held-out null removes each held-out reference donor's offset the same
+  way. A mapper that fits the query by surgery places each donor with its own displacement,
+  which a single cohort offset leaves behind; on the simulation grid that raised the false
+  out-of-reference rate in the scANVI and scPoli latents to 0.10 to 0.16 against a nominal
+  0.05 while the kNN latent sat at 0.04. `route.reference["latent_offset"]` reports the
+  mode, the donors with their own offset and the offset size in per-dimension reference sd.
+
 ### Changed
 - The built-in kNN path no longer attaches its vote fraction as `Predictions.support`; local
   support is computed once, after cohort-offset removal, for every backend alike.

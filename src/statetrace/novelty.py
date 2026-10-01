@@ -68,6 +68,51 @@ def estimate_cohort_offset(
     return np.median(np.vstack(disp), axis=0).astype(np.float32)
 
 
+def estimate_group_offsets(
+    query_latent: np.ndarray,
+    group_codes: np.ndarray,
+    state_codes: np.ndarray,
+    centroids: np.ndarray,
+    *,
+    min_cells: int = 20,
+    min_states: int = 3,
+    fallback: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Per-group (donor) latent offset: the component-wise median over the group's states (with
+    at least ``min_cells`` cells each) of the displacement of its state means from the
+    reference centroids. A group carrying fewer than ``min_states`` such states gets
+    ``fallback`` (the whole-cohort offset by default). Mapping tools that fit the query with
+    surgery place each query donor with its own displacement, which a single cohort offset
+    does not remove; a per-donor offset does, at the price of not seeing a shift that moves
+    every state of a donor by the same vector, which is indistinguishable from a batch effect.
+
+    Returns
+    -------
+    offsets, own
+        ``(n_groups, n_dims)`` offsets and a boolean per group: ``True`` when it was estimated
+        from the group's own cells.
+    """
+    group_codes = np.asarray(group_codes)
+    state_codes = np.asarray(state_codes)
+    n_groups = int(group_codes.max()) + 1 if len(group_codes) else 0
+    if fallback is None:
+        fallback = estimate_cohort_offset(query_latent, state_codes, centroids, min_cells=min_cells)
+    offsets = np.tile(np.asarray(fallback, dtype=np.float32), (n_groups, 1))
+    own = np.zeros(n_groups, dtype=bool)
+    for g in range(n_groups):
+        in_g = group_codes == g
+        disp = []
+        for k in range(centroids.shape[0]):
+            sel = in_g & (state_codes == k)
+            if sel.sum() >= min_cells:
+                disp.append(query_latent[sel].mean(axis=0) - centroids[k])
+        if len(disp) >= min_states:
+            offsets[g] = np.median(np.vstack(disp), axis=0)
+            own[g] = True
+    return offsets, own
+
+
 def raw_distance(
     latent: np.ndarray, assigned_codes: np.ndarray, centroids: np.ndarray
 ) -> np.ndarray:
@@ -187,24 +232,44 @@ def holdout_evidence(
     index_template: Any = None,
     n_neighbors: int = 15,
     metric: str = "cosine",
+    group_offset: bool = True,
+    min_cells: int = 20,
+    min_states: int = 3,
 ) -> pd.DataFrame:
     """
     Per held-out cell, the three novelty quantities measured against the *training* folds
     only: distance to the centroid of its true state, kNN distance to the k-th nearest
     training cell, and local support (fraction of the k nearest training cells carrying its
     true state). These carry the effect of an unseen group (donor), so they are the null
-    against which query cells are judged. One row per cell in the order of ``folds``.
+    against which query cells are judged. With ``group_offset`` each held-out group's own
+    latent offset (:func:`estimate_group_offsets`, true states, training centroids) is
+    removed first, exactly as :func:`statetrace.validate_transport` removes a query donor's,
+    so the null and the query are measured the same way. One row per cell in the order of
+    ``folds``.
     """
     states = np.asarray(states).astype(str)
     labels = states[state_codes]
     n_states = len(states)
+    group_labels = np.asarray(group_labels).astype(str)
     rows: list[pd.DataFrame] = []
     for _, test in folds:
         train = ~test
         centroids, _ = state_geometry(latent[train], state_codes[train], n_states)
         present = np.bincount(state_codes[train], minlength=n_states) > 0
         codes = state_codes[test]
-        dist = raw_distance(latent[test], np.where(present[codes], codes, -1), centroids)
+        Zt = latent[test]
+        if group_offset:
+            gcodes = pd.factorize(group_labels[test], sort=True)[0]
+            offsets, _ = estimate_group_offsets(
+                Zt,
+                gcodes,
+                np.where(present[codes], codes, -1),
+                centroids,
+                min_cells=min_cells,
+                min_states=min_states,
+            )
+            Zt = Zt - offsets[gcodes]
+        dist = raw_distance(Zt, np.where(present[codes], codes, -1), centroids)
         template = index_template.clone() if hasattr(index_template, "clone") else None
         index = neighbor_index(
             latent[train],
@@ -213,7 +278,7 @@ def holdout_evidence(
             n_neighbors=n_neighbors,
             metric=metric,
         )
-        support, knn = neighbor_evidence(index, latent[test], codes, states)
+        support, knn = neighbor_evidence(index, Zt, codes, states)
         rows.append(
             pd.DataFrame(
                 {

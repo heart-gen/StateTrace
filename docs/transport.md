@@ -186,18 +186,27 @@ of them; a warning is raised below 90 % retention and the retention is recorded 
 
 ## Cohort offset
 
-A study or batch effect that moves every query cell the same way is estimated and removed
-before the distance and shift diagnostics (`TransportConfig.correct_cohort_offset`), in both
-coordinate systems. In the latent it is the component-wise median of the per-state centroid
-displacements. In expression space the unit is the donor: a donor's genotype, age, sex or
-processing batch moves all of its states together, so each donor's gene-wise median
-standardised profile over the states it carries (at least
-`ExpressionConfig.offset_min_states`, default 3) is subtracted before scoring, for held-out
-reference donors when the null is built and for query donors alike (`group_offset`). A
-state-specific shift survives the median as long as fewer than half of a donor's states
-shift. Donors carrying fewer states receive the cohort-wide median offset. The sizes are
-reported once in `route.reference["cohort_offset_per_dim_sd"]` (latent) and
-`route.reference["expression"]["cohort_offset_rms"]` (expression, the median donor offset)
+An effect that moves all of a donor's cells the same way is estimated and removed before the
+distance and shift diagnostics (`TransportConfig.correct_cohort_offset`), in both coordinate
+systems, and the unit is the donor in both. In the latent, each query donor's offset is the
+component-wise median over its states (with at least `min_cells_per_group` cells, and at
+least `offset_min_states` such states, default 3) of the displacement of its state means
+from the reference centroids (`latent_group_offset`, default on); donors carrying fewer
+states receive the cohort-wide median offset. The held-out null is built the same way, each
+held-out reference donor's offset removed against the training centroids, so query and null
+are measured alike. This matters for mappers that fit the query by surgery: they place each
+query donor with its own displacement, which a single cohort offset leaves behind, and on
+the simulation grid that raised the false out-of-reference rate in the scANVI and scPoli
+latents to two or three times nominal while the kNN latent stayed on it. In expression
+space each donor's gene-wise median standardised profile over the states it carries (at
+least `ExpressionConfig.offset_min_states`, default 3) is subtracted before scoring, for
+held-out reference donors when the null is built and for query donors alike
+(`group_offset`). A state-specific shift survives the median as long as fewer than half of a
+donor's states shift; a shift that moves every state of a donor by the same vector is
+indistinguishable from a batch effect and is removed. The sizes are reported once in
+`route.reference["latent_offset"]` (mode, donors with their own offset, mean offset in
+per-dimension reference sd), `route.reference["cohort_offset_per_dim_sd"]` (the cohort
+median, latent) and `route.reference["expression"]["cohort_offset_rms"]` (expression)
 rather than as shift in every state. Per-donor centring is what makes the pseudobulk test
 sensitive: the between-donor spread of pseudobulk distances is dominated by shared donor
 offsets, and removing them narrows the held-out null several-fold. A platform effect whose

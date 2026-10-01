@@ -155,10 +155,18 @@ class TransportConfig:
     expression_layer
         Query ``layers`` key holding raw counts for the expression-space diagnostic (``None``:
         ``query.X``).
-    correct_cohort_offset
-        Estimate a whole-cohort offset (median per-state displacement, in the latent and in
-        standardised expression) and remove it before distance and shift diagnostics; the
-        offset is reported once per coordinate system.
+    correct_cohort_offset, latent_group_offset, offset_min_states
+        Remove a latent offset before distance and shift diagnostics. With
+        ``latent_group_offset`` (default) each query donor's own offset is removed: the median
+        over its states with at least ``min_cells_per_group`` cells of the displacement of its
+        state means from the reference centroids, when it carries at least
+        ``offset_min_states`` such states; other donors get the whole-cohort offset (the
+        median over the cohort's states). Mappers that fit the query by surgery place each
+        donor with its own displacement, which a single cohort offset leaves behind and the
+        held-out null (built from reference donors, offsets removed the same way) does not
+        cover. ``latent_group_offset=False`` removes only the cohort offset;
+        ``correct_cohort_offset=False`` removes nothing. The expression space removes
+        per-donor offsets on its own terms (``ExpressionConfig.group_offset``).
     novelty_calibration
         ``"holdout"`` standardises reference distances against the leave-one-group-out
         distance statistics stored with the reference (falls back to in-sample when none
@@ -190,6 +198,8 @@ class TransportConfig:
     shift_high: float = 4.0
     require_reference_validation: bool = True
     correct_cohort_offset: bool = True
+    latent_group_offset: bool = True
+    offset_min_states: int = 3
     novelty_calibration: str = "holdout"
     shift_source: str = "auto"
     expression_layer: str | None = None
@@ -600,12 +610,40 @@ def validate_transport(
         support_thr = np.full(len(states), np.nan)
     else:
         support_thr = np.minimum(support_thr, cfg.min_support)
+    group_codes_q, group_names_q = pd.factorize(query.obs[group_key].astype(str), sort=True)
+    latent_offset: dict[str, Any] = {"mode": "none"}
     if Z is not None:
         if cfg.correct_cohort_offset:
             cohort_offset = novelty.estimate_cohort_offset(
                 Z, codes, reference.centroids_, min_cells=cfg.min_cells_per_group
             )
-            Z = Z - cohort_offset
+            if cfg.latent_group_offset:
+                offsets, own = novelty.estimate_group_offsets(
+                    Z,
+                    group_codes_q,
+                    codes,
+                    reference.centroids_,
+                    min_cells=cfg.min_cells_per_group,
+                    min_states=cfg.offset_min_states,
+                    fallback=cohort_offset,
+                )
+                Z = Z - offsets[group_codes_q]
+                per_dim_sd = float(
+                    np.nanmedian(reference.geometry_[:, 0] / np.sqrt(reference.latent_.shape[1]))
+                )
+                latent_offset = {
+                    "mode": "group",
+                    "groups_with_own_offset": int(own.sum()),
+                    "groups": int(len(own)),
+                    "group_offset_rms_per_dim_sd": float(
+                        np.sqrt((offsets**2).sum(axis=1)).mean() / per_dim_sd
+                    )
+                    if per_dim_sd > 0
+                    else None,
+                }
+            else:
+                Z = Z - cohort_offset
+                latent_offset = {"mode": "cohort"}
         nov_cal = calibration if cfg.novelty_calibration == "holdout" else None
         geometry = novelty.calibrated_geometry(reference.geometry_, nov_cal, states)
         dist = novelty.raw_distance(Z, codes, reference.centroids_)
@@ -696,7 +734,6 @@ def validate_transport(
         )
 
     # frozen biological space: donor x state pseudobulk shift
-    group_codes_q, group_names_q = pd.factorize(query.obs[group_key].astype(str), sort=True)
     expr_table: pd.DataFrame | None = None
     expr_prov: dict[str, Any] = {"available": False}
     expr_shift = np.full(len(states), np.nan)
@@ -934,6 +971,7 @@ def validate_transport(
                 and reference.validation_.holdout_evidence is not None
                 else "fixed"
             ),
+            "latent_offset": latent_offset,
             "cohort_offset_norm": float(np.linalg.norm(cohort_offset)) if Z is not None else None,
             "cohort_offset_per_dim_sd": (
                 float(
