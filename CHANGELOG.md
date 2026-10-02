@@ -66,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   donor's offset relative to the query and sat too tight: on the simulation grid the
   predeclared rule's false rate in the kNN latent rose with donor effect to 0.25 before this
   change.
+- Latent offsets (cohort and per-donor) are geometric medians of the per-state
+  displacements (Weiszfeld), not component-wise medians, so one shifted state does not leak
+  into the offset when the number of states is even. The expression space keeps its
+  gene-wise median.
+- Raw and residual displacement are both reported: `latent_shift_raw` and
+  `expression_shift_raw` (before donor-offset removal) beside the residual `latent_shift`
+  and `expression_shift` that decide the level; per donor, `latent_offset_sd` and
+  `expression_offset_rms` in `groups`, with `expression_distance_raw` and
+  `expression_shift_z_raw`; the report shows raw/residual per state and the offsets per
+  donor.
 
 ### Changed
 - The built-in kNN path no longer attaches its vote fraction as `Predictions.support`; local

@@ -313,13 +313,14 @@ def remove_group_offsets(
     *,
     min_states: int = 3,
     cohort_offset: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray | None, dict[int, np.ndarray]]:
     """
     Subtract each donor's gene-wise median standardised profile over the states it carries.
 
     Donors with fewer than ``min_states`` profiles receive ``cohort_offset`` (the median of
-    the estimated donor offsets, or the given vector) instead. Returns the centred matrix and
-    the cohort offset actually used (``None`` when nothing could be estimated).
+    the estimated donor offsets, or the given vector) instead. Returns the centred matrix,
+    the cohort offset actually used (``None`` when nothing could be estimated) and the
+    offset applied to each donor (own or cohort).
     """
     g = np.asarray(group_codes)
     Z = np.array(Z, dtype=np.float64, copy=True)
@@ -330,12 +331,14 @@ def remove_group_offsets(
             offsets[int(d)] = np.median(Z[sel], axis=0)
     if cohort_offset is None and offsets:
         cohort_offset = np.median(np.vstack(list(offsets.values())), axis=0)
+    applied: dict[int, np.ndarray] = {}
     for d in np.unique(g):
         sel = g == d
         off = offsets.get(int(d), cohort_offset)
         if off is not None:
             Z[sel] -= off
-    return Z, cohort_offset
+            applied[int(d)] = off
+    return Z, cohort_offset, applied
 
 
 def holdout_null(
@@ -356,10 +359,10 @@ def holdout_null(
         ref_Z, ref_st = fit["Z"], fit["rows"]["state"].to_numpy()
         if cfg.group_offset:
             # the held-out donor is centred on itself; a single donor has no cohort fallback
-            Z, _ = remove_group_offsets(
+            Z, _, _ = remove_group_offsets(
                 Z, np.zeros(len(st), dtype=int), min_states=cfg.offset_min_states
             )
-            ref_Z, _ = remove_group_offsets(
+            ref_Z, _, _ = remove_group_offsets(
                 ref_Z, fit["rows"]["group"].to_numpy(), min_states=cfg.offset_min_states
             )
         m = score_profiles(
@@ -587,17 +590,24 @@ def score_query(
     ref_Z = (sub["profiles"] - sub["mu"][ref_st]) / sub["sigma"][ref_st]
     ref_ok = np.isfinite(ref_Z).all(axis=1)
     ref_Z = ref_Z[ref_ok]
+    ref_Z_raw = ref_Z
+    Z_raw = Z
+    applied: dict[int, np.ndarray] = {}
     if correct_cohort_offset and len(rows):
         if per_group:
-            Z, offset = remove_group_offsets(Z, rows["group"].to_numpy(), min_states=min_states)
+            Z, offset, applied = remove_group_offsets(
+                Z, rows["group"].to_numpy(), min_states=min_states
+            )
         else:
             offset = estimate_cohort_offset(Z, st, min_states=min_states)
             if offset is not None:
                 Z = Z - offset
+                applied = {int(d): offset for d in np.unique(rows["group"].to_numpy())}
     if per_group:
-        ref_Z, _ = remove_group_offsets(
+        ref_Z, _, _ = remove_group_offsets(
             ref_Z, ref_rows.loc[ref_ok, "group"].to_numpy(), min_states=min_states
         )
+    beyond = float(space.params.get("beyond_z", 2.0))
     if len(rows):
         m = score_profiles(
             Z,
@@ -605,16 +615,32 @@ def score_query(
             components=sub["components"],
             reference_Z=ref_Z,
             reference_states=ref_st[ref_ok],
-            beyond_z=float(space.params.get("beyond_z", 2.0)),
+            beyond_z=beyond,
         )
+        # the same profiles before any offset removal, against the uncentred reference rows:
+        # what the donor offset took out, reported next to the residual
+        m_raw = score_profiles(
+            Z_raw,
+            st,
+            components=sub["components"],
+            reference_Z=ref_Z_raw,
+            reference_states=ref_st[ref_ok],
+            beyond_z=beyond,
+        )
+        m["distance_raw"] = m_raw["distance"].to_numpy()
+        m["offset_rms"] = [
+            float(np.sqrt((applied[int(d)] ** 2).mean())) if int(d) in applied else np.nan
+            for d in rows["group"].to_numpy()
+        ]
     else:
-        m = pd.DataFrame(columns=list(METRICS), dtype=float)
+        m = pd.DataFrame(columns=[*METRICS, "distance_raw", "offset_rms"], dtype=float)
     table = pd.concat([rows, m], axis=1)
     stats = space.null_stats.reset_index(drop=True)
     mean = stats["mean"].to_numpy(dtype=float)
     sd = stats["sd"].to_numpy(dtype=float)
     with np.errstate(invalid="ignore", divide="ignore"):
         table["shift_z"] = (table["distance"].to_numpy(dtype=float) - mean[st]) / sd[st]
+        table["shift_z_raw"] = (table["distance_raw"].to_numpy(dtype=float) - mean[st]) / sd[st]
     pvals = np.full(len(table), np.nan)
     for i, (k, d) in enumerate(zip(st, table["distance"].to_numpy(dtype=float), strict=True)):
         nd = space.null.loc[space.null["state"] == k, "distance"].to_numpy(dtype=float)

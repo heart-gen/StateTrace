@@ -54,10 +54,37 @@ def state_geometry(
     return centroids, geometry
 
 
+def geometric_median(X: np.ndarray, *, max_iter: int = 200, tol: float = 1e-6) -> np.ndarray:
+    """
+    The point minimising the summed Euclidean distance to the rows of ``X`` (Weiszfeld's
+    iteration from the component-wise median). Rotation-invariant and, unlike the
+    component-wise median, a single vector that is pulled little by one outlying row even
+    when the number of rows is even. With one row it is that row.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    if X.shape[0] == 1:
+        return X[0].copy()
+    y = np.median(X, axis=0)
+    for _ in range(max_iter):
+        d = np.sqrt(((X - y) ** 2).sum(axis=1))
+        if (d < 1e-12).any():  # at a data point: it is the minimiser if its "pull" is small
+            w = np.where(d < 1e-12, 0.0, 1.0 / np.maximum(d, 1e-12))
+        else:
+            w = 1.0 / d
+        if w.sum() == 0:
+            break
+        y_new = (w[:, None] * X).sum(axis=0) / w.sum()
+        if np.sqrt(((y_new - y) ** 2).sum()) < tol:
+            y = y_new
+            break
+        y = y_new
+    return y
+
+
 def estimate_cohort_offset(
     query_latent: np.ndarray, query_codes: np.ndarray, centroids: np.ndarray, *, min_cells: int = 20
 ) -> np.ndarray:
-    """Component-wise median of (query state centroid - reference state centroid) over states with enough cells."""
+    """Geometric median of (query state mean - reference state centroid) over states with enough cells."""
     disp = []
     for k in range(centroids.shape[0]):
         sel = query_codes == k
@@ -65,7 +92,7 @@ def estimate_cohort_offset(
             disp.append(query_latent[sel].mean(axis=0) - centroids[k])
     if not disp:
         return np.zeros(centroids.shape[1], dtype=np.float32)
-    return np.median(np.vstack(disp), axis=0).astype(np.float32)
+    return geometric_median(np.vstack(disp)).astype(np.float32)
 
 
 def estimate_group_offsets(
@@ -79,9 +106,9 @@ def estimate_group_offsets(
     fallback: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Per-group (donor) latent offset: the component-wise median over the group's states (with
-    at least ``min_cells`` cells each) of the displacement of its state means from the
-    reference centroids. A group carrying fewer than ``min_states`` such states gets
+    Per-group (donor) latent offset: the geometric median (:func:`geometric_median`) over the
+    group's states (with at least ``min_cells`` cells each) of the displacement of its state
+    means from the reference centroids. A group carrying fewer than ``min_states`` such states gets
     ``fallback`` (the whole-cohort offset by default). Mapping tools that fit the query with
     surgery place each query donor with its own displacement, which a single cohort offset
     does not remove; a per-donor offset does, at the price of not seeing a shift that moves
@@ -108,7 +135,7 @@ def estimate_group_offsets(
             if sel.sum() >= min_cells:
                 disp.append(query_latent[sel].mean(axis=0) - centroids[k])
         if len(disp) >= min_states:
-            offsets[g] = np.median(np.vstack(disp), axis=0)
+            offsets[g] = geometric_median(np.vstack(disp))
             own[g] = True
     return offsets, own
 

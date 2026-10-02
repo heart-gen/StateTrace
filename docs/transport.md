@@ -130,7 +130,8 @@ least `min_confidence` when a confidence exists, out-of-reference fraction at mo
 | `confidence_source` | `backend`, `support` (local support stands in for a missing confidence) or `none` |
 | `shift`, `shift_level`, `shift_source` | the deciding shift, in reference sd units, and the coordinate system it came from (`expression` when the reference carries an expression space and the query has its genes, else `latent`): low (< 2) / moderate / high (>= 4) / unknown |
 | `expression_shift`, `expression_shift_level`, `groups_shifted`, `groups_scored_expression` | median over query donors of the donor x state pseudobulk distance standardised against held-out reference donors; donors at or above the high threshold, of donors with enough cells |
-| `latent_shift`, `latent_shift_level` | centroid shift in the mapping latent after cohort-offset removal, in per-dimension reference sd (secondary evidence) |
+| `latent_shift`, `latent_shift_level` | centroid shift in the mapping latent after donor-offset removal, in per-dimension reference sd (secondary evidence) |
+| `latent_shift_raw`, `expression_shift_raw` | the same two shifts before any donor offset was removed; a state whose raw and residual values agree is displaced on its own, one whose raw value is large and residual small moved with its donor |
 | `n_cells_in_reference`, `groups_recovered_in_reference`, `shift_in_reference`, `expression_shift_in_reference`, `latent_shift_in_reference` | the same evidence restricted to cells that lie within the reference distribution |
 | `novel_population` | an out-of-reference population (above the state's `ood_threshold`) sits next to the state |
 | `query_recall` | only when query labels are given (benchmarks) |
@@ -189,7 +190,8 @@ of them; a warning is raised below 90 % retention and the retention is recorded 
 An effect that moves all of a donor's cells the same way is estimated and removed before the
 distance and shift diagnostics (`TransportConfig.correct_cohort_offset`), in both coordinate
 systems, and the unit is the donor in both. In the latent, each query donor's offset is the
-component-wise median over its states (with at least `min_cells_per_group` cells, and at
+geometric median (the point closest in summed Euclidean distance, so one shifted state
+does not leak in) over its states (with at least `min_cells_per_group` cells, and at
 least `offset_min_states` such states, default 3) of the displacement of its state means
 from the reference centroids (`latent_group_offset`, default on); donors carrying fewer
 states receive the cohort-wide median offset. The held-out null is built the same way, each
@@ -207,7 +209,10 @@ indistinguishable from a batch effect and is removed. The sizes are reported onc
 `route.reference["latent_offset"]` (mode, donors with their own offset, mean offset in
 per-dimension reference sd), `route.reference["cohort_offset_per_dim_sd"]` (the cohort
 median, latent) and `route.reference["expression"]["cohort_offset_rms"]` (expression)
-rather than as shift in every state. Per-donor centring is what makes the pseudobulk test
+rather than as shift in every state, and per donor in `groups` (`latent_offset_sd`,
+`expression_offset_rms`). Both the raw displacement and the residual after offset removal
+are kept (`*_shift_raw` per state, `expression_distance_raw` per donor by state), so what
+the offset took out is visible next to what remains. Per-donor centring is what makes the pseudobulk test
 sensitive: the between-donor spread of pseudobulk distances is dominated by shared donor
 offsets, and removing them narrows the held-out null several-fold. A platform effect whose
 size differs by state is indistinguishable from biology by this estimate; the benchmark's

@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from . import schema
@@ -64,6 +65,32 @@ def write_report(
         show["groups_shifted"].astype(str) + "/" + st["groups_scored_expression"].astype(str)
     )
     show = show.drop(columns="query_groups")
+    show.insert(
+        show.columns.get_loc("shift_level"),
+        "shift_raw/residual",
+        [
+            f"{raw:.1f}/{res:.1f}" if np.isfinite(raw) and np.isfinite(res) else ""
+            for raw, res in zip(
+                np.where(
+                    st["shift_source"] == "expression",
+                    st["expression_shift_raw"],
+                    st["latent_shift_raw"],
+                ),
+                st["shift"],
+                strict=True,
+            )
+        ],
+    )
+    offsets = (
+        route.groups.groupby("group")[["latent_offset_sd", "expression_offset_rms"]]
+        .first()
+        .rename(
+            columns={
+                "latent_offset_sd": "latent offset (sd)",
+                "expression_offset_rms": "expression offset (rms z)",
+            }
+        )
+    )
     expr = route.reference.get("expression", {}) or {}
     md = [
         "# StateTrace transport report",
@@ -87,7 +114,9 @@ def write_report(
         "Columns: reference groups supporting the state and its grouped-holdout reproducibility; "
         "query groups that recovered the state (of all query groups); recovery rate among groups "
         "observing it; median mapping confidence; fraction of its cells that are uncertain or "
-        "out of reference; shift level and the coordinate system it was judged in (`expression`: "
+        "out of reference; the shift before and after donor-offset removal (raw/residual, in "
+        "reference sd units; the residual decides the level); shift level and the coordinate "
+        "system it was judged in (`expression`: "
         "median over query donors of the donor x state pseudobulk distance, standardised against "
         "held-out reference donors in the frozen expression space; `latent`: centroid shift in "
         "per-dimension reference sd in the mapping latent; both after cohort-offset removal); "
@@ -108,7 +137,11 @@ def write_report(
             f"confidence source: {route.reference.get('confidence_source')}; "
             f"out-of-reference rule: {route.reference.get('ood_rule')}"
         )
-        + ". State shift comes from the frozen expression space"
+        + ". Per-donor offsets removed before the residual shift (latent, in per-dimension "
+        "reference sd; expression, RMS of the standardised profile):"
+        + "\n\n"
+        + _md_table(offsets, index_name="donor")
+        + "\n\nState shift comes from the frozen expression space"
         + (
             f" ({expr.get('n_genes_scored')} genes, feature retention "
             f"{expr.get('feature_retention', float('nan')):.0%}, cohort offset RMS "

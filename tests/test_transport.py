@@ -554,3 +554,40 @@ def test_group_offsets_cover_query_donors_with_their_own_displacement(transport_
     resid = offsets - shifts
     # per-state means from ~25 cells carry sampling noise of about 0.3 per dimension
     assert np.abs(resid - resid.mean(axis=0)).mean() < 0.5
+
+
+def test_geometric_median_resists_one_outlying_state():
+    from statetrace.novelty import geometric_median
+
+    rng = np.random.default_rng(1)
+    cluster = rng.normal(0, 0.1, size=(3, 10))
+    outlier = np.full((1, 10), 9.0)
+    X = np.vstack([cluster, outlier])
+    gm = geometric_median(X)
+    cm = np.median(X, axis=0)
+    # four rows: the component-wise median averages the two middle values and leaks the
+    # outlier; the geometric median stays with the cluster
+    assert np.linalg.norm(gm - cluster.mean(axis=0)) < 0.3
+    assert np.linalg.norm(cm - cluster.mean(axis=0)) > 3.0
+    assert np.allclose(geometric_median(X[:1]), X[0])
+
+
+def test_raw_and_residual_displacement_are_both_reported(validated_ref, transport_pair, tmp_path):
+    _, qry, _ = transport_pair
+    route = validate_transport(validated_ref, qry, group_key="donor_id")
+    st, gr = route.states, route.groups
+    for col in ("latent_shift_raw", "expression_shift_raw", "latent_shift", "expression_shift"):
+        assert col in st and st[col].notna().any()
+    for col in (
+        "latent_offset_sd",
+        "expression_offset_rms",
+        "expression_distance_raw",
+        "expression_shift_z_raw",
+    ):
+        assert col in gr and gr[col].notna().any()
+    # the residual decides; the raw value is kept beside it, and the planted shift of S1 is
+    # visible in both
+    assert st.loc["S1", "latent_shift_raw"] > 4 and st.loc["S1", "latent_shift"] > 4
+    assert (gr["latent_offset_sd"] >= 0).all()
+    text = (route.report(tmp_path / "rep") / "report.md").read_text()
+    assert "raw/residual" in text and "| donor |" in text

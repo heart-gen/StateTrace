@@ -78,6 +78,8 @@ STATE_COLUMNS = (
     "latent_shift",
     "latent_shift_level",
     "latent_shift_in_reference",
+    "latent_shift_raw",
+    "expression_shift_raw",
     "novel_population",
     "query_recall",
     "status",
@@ -612,7 +614,15 @@ def validate_transport(
         support_thr = np.minimum(support_thr, cfg.min_support)
     group_codes_q, group_names_q = pd.factorize(query.obs[group_key].astype(str), sort=True)
     latent_offset: dict[str, Any] = {"mode": "none"}
+    shift_raw = np.full(len(states), np.nan)
+    group_latent_offset_sd = np.full(len(group_names_q), np.nan)
     if Z is not None:
+        shift_raw = novelty.centroid_shift(
+            Z, codes, reference.centroids_, reference.geometry_, len(states)
+        )
+        per_dim_sd = float(
+            np.nanmedian(reference.geometry_[:, 0] / np.sqrt(reference.latent_.shape[1]))
+        )
         if cfg.correct_cohort_offset:
             cohort_offset = novelty.estimate_cohort_offset(
                 Z, codes, reference.centroids_, min_cells=cfg.min_cells_per_group
@@ -628,9 +638,8 @@ def validate_transport(
                     fallback=cohort_offset,
                 )
                 Z = Z - offsets[group_codes_q]
-                per_dim_sd = float(
-                    np.nanmedian(reference.geometry_[:, 0] / np.sqrt(reference.latent_.shape[1]))
-                )
+                if per_dim_sd > 0:
+                    group_latent_offset_sd = np.sqrt((offsets**2).sum(axis=1)) / per_dim_sd
                 latent_offset = {
                     "mode": "group",
                     "groups_with_own_offset": int(own.sum()),
@@ -643,6 +652,8 @@ def validate_transport(
                 }
             else:
                 Z = Z - cohort_offset
+                if per_dim_sd > 0:
+                    group_latent_offset_sd[:] = float(np.linalg.norm(cohort_offset)) / per_dim_sd
                 latent_offset = {"mode": "cohort"}
         nov_cal = calibration if cfg.novelty_calibration == "holdout" else None
         geometry = novelty.calibrated_geometry(reference.geometry_, nov_cal, states)
@@ -738,6 +749,7 @@ def validate_transport(
     expr_prov: dict[str, Any] = {"available": False}
     expr_shift = np.full(len(states), np.nan)
     expr_shift_in = np.full(len(states), np.nan)
+    expr_shift_raw = np.full(len(states), np.nan)
     groups_shifted = np.zeros(len(states), dtype=int)
     groups_scored = np.zeros(len(states), dtype=int)
     want_expr = cfg.shift_source in ("auto", "expression")
@@ -752,6 +764,11 @@ def validate_transport(
                 all_rows, len(states), high=cfg.shift_high
             )
             expr_shift_in, _, _ = _expr.summarise_states(in_rows, len(states), high=cfg.shift_high)
+            expr_shift_raw, _, _ = _expr.summarise_states(
+                all_rows.drop(columns="shift_z").rename(columns={"shift_z_raw": "shift_z"}),
+                len(states),
+                high=cfg.shift_high,
+            )
             expr_table["state"] = states[expr_table["state"].to_numpy()]
     elif cfg.shift_source == "expression":
         warnings.warn(
@@ -824,19 +841,40 @@ def validate_transport(
     groups = groups[groups["state"] != schema.UNKNOWN_LABEL]
     if expr_table is not None:
         e = expr_table[~expr_table["in_reference_only"]][
-            ["group", "state", "distance", "shift_z", "shift_p"]
+            [
+                "group",
+                "state",
+                "distance",
+                "shift_z",
+                "shift_p",
+                "distance_raw",
+                "shift_z_raw",
+                "offset_rms",
+            ]
         ].rename(
             columns={
                 "distance": "expression_distance",
                 "shift_z": "expression_shift_z",
                 "shift_p": "expression_shift_p",
+                "distance_raw": "expression_distance_raw",
+                "shift_z_raw": "expression_shift_z_raw",
+                "offset_rms": "expression_offset_rms",
             }
         )
         groups = groups.merge(e, on=["group", "state"], how="left")
     else:
-        groups["expression_distance"] = np.nan
-        groups["expression_shift_z"] = np.nan
-        groups["expression_shift_p"] = np.nan
+        for col in (
+            "expression_distance",
+            "expression_shift_z",
+            "expression_shift_p",
+            "expression_distance_raw",
+            "expression_shift_z_raw",
+            "expression_offset_rms",
+        ):
+            groups[col] = np.nan
+    groups["latent_offset_sd"] = group_latent_offset_sd[
+        pd.Index(group_names_q.astype(str)).get_indexer(groups["group"].astype(str))
+    ]
     groups["shifted"] = groups["expression_shift_z"].to_numpy(dtype=float) >= cfg.shift_high
 
     # state table
@@ -879,6 +917,8 @@ def validate_transport(
         shift, moderate=cfg.shift_moderate, high=cfg.shift_high
     )
     st["latent_shift_in_reference"] = shift_in_ref
+    st["latent_shift_raw"] = shift_raw
+    st["expression_shift_raw"] = expr_shift_raw
     st["expression_shift"] = expr_shift
     st["expression_shift_level"] = novelty.shift_level(
         expr_shift, moderate=cfg.shift_moderate, high=cfg.shift_high
