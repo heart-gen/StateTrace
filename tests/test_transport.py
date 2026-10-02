@@ -564,12 +564,23 @@ def test_geometric_median_resists_one_outlying_state():
     outlier = np.full((1, 10), 9.0)
     X = np.vstack([cluster, outlier])
     gm = geometric_median(X)
-    cm = np.median(X, axis=0)
-    # four rows: the component-wise median averages the two middle values and leaks the
-    # outlier; the geometric median stays with the cluster
     assert np.linalg.norm(gm - cluster.mean(axis=0)) < 0.3
-    assert np.linalg.norm(cm - cluster.mean(axis=0)) > 3.0
     assert np.allclose(geometric_median(X[:1]), X[0])
+    # with two of four rows displaced in different directions the component-wise median
+    # averages a cluster row with a displaced row in every coordinate and drifts; the
+    # geometric median is pulled far less
+    two = np.vstack(
+        [
+            cluster[:2],
+            np.full((1, 10), 9.0),
+            -np.full((1, 10), 9.0) * np.r_[np.ones(5), -np.ones(5)],
+        ]
+    )
+    gm2 = geometric_median(two)
+    cm2 = np.median(two, axis=0)
+    assert np.linalg.norm(gm2 - cluster[:2].mean(axis=0)) < np.linalg.norm(
+        cm2 - cluster[:2].mean(axis=0)
+    )
 
 
 def test_raw_and_residual_displacement_are_both_reported(validated_ref, transport_pair, tmp_path):
