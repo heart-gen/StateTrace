@@ -60,8 +60,13 @@ the frozen expression space discriminates the absorbing state from the intact on
 predeclared out-of-reference rule holds its nominal false rate once the null is built the way
 the query is (assigned labels, per-donor geometric-median offsets). Left open from Stage 1: the
 identity-loss status (PI decision), the scConform and Symphony R bridges (carried to G1), and
-the optional Benchmark A vs B optimism grid. Stage 2 is unlocked; its analysis code does not
-exist yet.
+the optional Benchmark A vs B optimism grid. Stage 2 is unlocked and its analysis code exists
+(benchmark `statetrace_benchmark/perturbation/`, 2026-10-02: prepare, donor / study / random
+holdout with the mappers refitted per fold, withheld state, donor-support restriction,
+aggregation and the G1 evaluator); it waits on the PI's choice of the real multi-donor source
+(GSE132044 has two donors, enough for the study holdout and the withheld state but not for the
+donor-support curve) and on a decision about the G1 criterion at exactly three donors, which
+the predeclared support threshold of three donors makes eligible.
 
 Blocking inputs, by the week they are needed (`INPUTS_NEEDED.md` in the benchmark repository
 has the full list):
