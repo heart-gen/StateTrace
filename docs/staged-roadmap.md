@@ -62,11 +62,11 @@ the query is (assigned labels, per-donor geometric-median offsets). Left open fr
 identity-loss status (PI decision), the scConform and Symphony R bridges (carried to G1), and
 the optional Benchmark A vs B optimism grid. Stage 2 is unlocked and its analysis code exists
 (benchmark `statetrace_benchmark/perturbation/`, 2026-10-02: prepare, donor / study / random
-holdout with the mappers refitted per fold, withheld state, donor-support restriction,
-aggregation and the G1 evaluator); it waits on the PI's choice of the real multi-donor source
-(GSE132044 has two donors, enough for the study holdout and the withheld state but not for the
-donor-support curve) and on a decision about the G1 criterion at exactly three donors, which
-the predeclared support threshold of three donors makes eligible.
+holdout with the mappers refitted per fold, withheld state, donor-support restriction with
+sensitivity thresholds, aggregation and the G1 evaluator). The stage is registered on
+Stephenson et al. 2021 PBMC (GSE132044 has two donors), the G1 criterion reads fewer than
+three donors and the comparator set is fixed (Symphony in G1; scConform and Azimuth at G2).
+Next: the 7.2 GB download, the Symphony adapter, the run.
 
 Blocking inputs, by the week they are needed (`INPUTS_NEEDED.md` in the benchmark repository
 has the full list):
@@ -170,18 +170,20 @@ holdout, so that G1 can ask whether the problem exists on real multi-donor data.
 
 ### Deliverables
 
-- Symphony adapter in the benchmark (R -> CSV -> `Predictions.from_symphony`).
-- scConform bridge for the uncertainty arm of G0 (b) and G1.
+- Symphony adapter in the benchmark (R -> CSV -> `Predictions.from_symphony`); the G1
+  comparator set is scANVI, scPoli and Symphony (PI, 2026-10-02). scConform and Seurat/Azimuth
+  moved to Stage 3 as G2 comparators.
 - scANVI `AnnDataBackend`: the latent is refit inside every held-out fold (`refit_latent=True`),
   lifting the v0.1 caveat that grouped holdout is an optimistic bound on embedding transfer.
-- Azimuth adapter, only if the PI includes the practical-workflow arm.
-- Donor-support restriction (20 / 10 / 5 / 3 / 1 donors) driven from the benchmark, with
-  `insufficient` assigned at <= 3 donors in >= 90 % of restrictions.
+- Donor-support restriction (20 / 10 / 5 / 3 / 1 donors) driven from the benchmark on
+  Stephenson et al. 2021 PBMC (130 participants, three sites; broad states carried by >= 10
+  donors, sensitivities at >= 20 and >= 5), with `insufficient` assigned at fewer than 3 donors
+  in >= 90 % of restrictions (amended 2026-10-02 from "at most 3", `GATES.md`).
 
 ### Promotion gate
 
-G1: withheld-state detection >= best comparator - 0.02; `insufficient` at <= 3 donors in
->= 90 % of restrictions; status agreement across the three mapping backends >= 0.8. U1 decided
+G1: withheld-state detection >= best comparator - 0.02; `insufficient` at fewer than 3 donors
+in >= 90 % of restrictions; status agreement across the three mapping backends >= 0.8. U1 decided
 from S1.5, S2.4 and S2.5: at least two real settings where cell-level F1 >= 0.80 while grouped
 holdout says `fragile` or `insufficient`. If U1 fails, the project stops and publishes the
 negative result; Stage 3 does not start.
