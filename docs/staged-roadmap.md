@@ -12,7 +12,7 @@ table and the milestone log when a stage changes state.
 | Stage | Status | Weeks | Deliverables | Promotion gate | Required evidence | Version | Last commit |
 |---|---|---|---|---|---|---|---|
 | 0 | complete | before 1 | Package, grouped validation (donor, study), reproducibility categories, `Predictions`, kNN baseline, frozen format, transport route and gating, report, feature harmonisation | Fresh install, silent import with torch and scvi blocked, full test suite, docs build | CI log, `tests/test_imports.py`, docs build | 0.1.0 (untagged) | `8dcf9bb` |
-| 1 | in progress | 1 - 2 | Two coordinate systems: frozen expression space with per-donor offsets (done); identity-loss status; local support in the tool's latent (done); novelty scores and calibrated thresholds (done); corrected simulator (done); tag v0.1.0 | **G0** on the full simulation grid: (a) cell accuracy within 2 points of scANVI / scPoli, (b) two arms: the predeclared out-of-reference rule beats the mapper's uncertainty at matched donor-calibrated false rate, and the absorbing state shows a high frozen-expression shift, (c) >= 90 % planted statuses correct, shift evidence scored separately | `00_gates/_m/G0.md` with both SHAs; grid summary CSV; smoke and rerun reports | 0.1.0 tag, 0.1.1 fixes | `841f1dc` |
+| 1 | G0 passed 2026-10-02 | 1 - 2 | Two coordinate systems: frozen expression space with per-donor offsets (done); identity-loss status; local support in the tool's latent (done); novelty scores and calibrated thresholds (done); corrected simulator (done); tag v0.1.0 | **G0** on the full simulation grid: (a) cell accuracy within 2 points of scANVI / scPoli, (b) two arms: the predeclared out-of-reference rule beats the mapper's uncertainty at matched donor-calibrated false rate, and the absorbing state shows a high frozen-expression shift, (c) >= 90 % planted statuses correct, shift evidence scored separately | `00_gates/_m/G0.md` with both SHAs; grid summary CSV; smoke and rerun reports | 0.1.0 tag, 0.1.1 fixes | `841f1dc` |
 | 2 | planned | 3 - 4 | Backend coverage: Symphony adapter (R -> CSV -> `from_symphony`), scConform bridge, scANVI `AnnDataBackend` with per-fold latent refit, Azimuth adapter if signed off; donor-support restriction runs | **G1** semi-synthetic perturbations on the NVU reference; **U1** decided (does the problem exist) | `G1.md`, `U1.md`; withheld-state AUROC table; reproducibility vs donor count; backend status agreement >= 0.8 | 0.2.0 | |
 | 3 | planned | 4 - 6 | Real-data robustness: study-level holdout on real studies; test of the per-donor offset assumption under a real platform effect; group-aware calibration tables; feature-retention reporting | **G2** PBMC and HLCA, **U2** decided (beats simple baselines at predicting replication); **G3** brain | `G2.md`, `U2.md`, `G3.md`; scIB reference table; calibration figure | 0.2.x, 0.3.0 | |
 | 4 | planned | 7 - 8 | Inference validity: downstream-validity helpers (type I error under permuted null, FDR, power, effect-size bias, replication summaries); gated versus ungated pseudobulk and differential-abundance pipeline | **G4** NVU -> SCORCH application and validity layer; **U3** decided (supported states replicate, gating controls type I error) | `G4.md`, `U3.md`; error-rate and replication tables | 0.3.0 | |
@@ -54,11 +54,14 @@ the next readiness gate needs.
 
 ## Current status
 
-Stage 0 is complete. Stage 1 has the expression space in place and validated on two seeds at
-the hard grid cell (both mappers absorb a planted state shift in their own latent; the
-expression space calls it `shifted` in every run; no false shift calls on stable states). The
-full grid has not run. Three software items remain in Stage 1 and one PI decision (the
-identity-loss status). Nothing in Stages 2 to 6 has started.
+Stage 0 is complete. Stage 1 passed G0 on 2026-10-02 (third full grid run, software
+`ef0560a`, tag v0.1.0): both mappers absorb a planted state shift in their own latent while
+the frozen expression space discriminates the absorbing state from the intact ones; the
+predeclared out-of-reference rule holds its nominal false rate once the null is built the way
+the query is (assigned labels, per-donor geometric-median offsets). Left open from Stage 1: the
+identity-loss status (PI decision), the scConform and Symphony R bridges (carried to G1), and
+the optional Benchmark A vs B optimism grid. Stage 2 is unlocked; its analysis code does not
+exist yet.
 
 Blocking inputs, by the week they are needed (`INPUTS_NEEDED.md` in the benchmark repository
 has the full list):
@@ -120,8 +123,8 @@ data with a shift diagnostic that does not depend on the mapper's latent.
 - [x] kNN novelty score, support calibration, joint score, calibrated population call (`ood_score`, `support_calibration`, `population_calibration`)
 - [x] Labels-only predictions path (`confidence_source`)
 - [x] Full grid, first run: 450 comparator cells plus the withheld-state curve with the mappers on the local TITAN RTX (2026-09-30 21:07 to 2026-10-01 07:22, `01_simulation/_h/local_grid.sh`); G0 failed, see the milestone log
-- [ ] Full grid, rerun after the per-donor latent offset fix and the expression-arm amendment (local, same runner); Bridges-2 (`run_stage.sh`) is the fallback, not a prerequisite
-- [ ] `00_gates/_m/G0.md` (written by `gates.evaluate` at the end of the local run); tag v0.1.0 at the SHA that passed; build the wheel Bridges-2 installs from
+- [x] Full grid, reruns after the per-donor latent offset fix and the expression-arm amendment (local, same runner): second run 2026-10-01 08:13 to 18:46 (false rate 0.098 from a true-label null), third run 2026-10-01 19:17 to 2026-10-02 05:57 with the assigned-label null and geometric-median offsets
+- [x] `00_gates/_m/G0.md`: **PASS** 2026-10-02 on `ef0560a`, recorded in `configs/gates.yaml` (`def81ff`); tag v0.1.0; wheel built with `uv build` for Bridges-2
 
 ### Commands
 
@@ -332,3 +335,5 @@ stages run.
 | 2026-09-30 | 1 | kNN and joint novelty scores, calibrated support and population thresholds; centroid q95 predeclared by the PI; G0 (b) re-specified as two arms | `cd3c8f1` | `dbbcda3` | `reports/2026-09-30_withheld_state_curve_knn.md` (addendum), `configs/thresholds.yaml` |
 | 2026-10-01 | 1 | First full stage-01 run on the local GPU (510 cells): G0 FAIL on easy-cell accuracy (0.3 points), the false rate in mapper latents (0.11 vs 0.05) and the expression arm as predeclared; latent-arm power and truth-category recovery pass | `be57889` | `8352c8a` | `00_gates/_m/G0.md` (first run) |
 | 2026-10-01 | 1 | Per-donor latent offsets for query and null (surgery places each query donor with its own displacement); expression arm amended to a discrimination criterion, recorded in `GATES.md`; rerun launched | `f1b2c65` | `833c470` | `GATES.md` Amendments |
+| 2026-10-01 | 1 | Held-out null built from assigned labels (as the query is); geometric-median latent offsets; raw and residual displacement reported; per-state AUROC made the primary expression-arm form with the within-run stress test secondary; (a) tolerance 0.03 (both in `GATES.md`, Amendments) | `ef0560a` | `15bc438` | `00_gates/_m/G0_2026-10-01_second_run.md` |
+| 2026-10-02 | 1 | Third full stage-01 run (510 cells, 10.7 h local GPU): **G0 PASS**. Pooled false rate 0.062 (scANVI 0.047, scPoli 0.078); latent-arm power margins 0.46 and 0.19; per-state expression AUROC 0.92 and 0.88; truth-category recovery 0.97 and 0.94; accuracy gap 2.3 points. v0.1.0 tagged; stage 02 unlocked | `ef0560a` (tag v0.1.0) | `def81ff` | `00_gates/_m/G0.md`, `configs/gates.yaml` |

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
+- Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
+- Plotting.
+- Cell-level frozen-expression displacement (the within-donor complement of the pseudobulk shift).
+
+## [0.1.0] - 2026-10-02
+
+First tagged release. Benchmark gate G0 (simulation: easy-cell accuracy, two-arm novelty,
+truth-category recovery against scANVI and scPoli) passed on this code at `ef0560a`
+(StateTrace-benchmarking `00_gates/_m/G0.md`, 2026-10-02).
+
 ### Added
 - Frozen biological space (`statetrace.expression`): donor x state pseudobulk profiles of the
   reference, standardised gene-wise by the reference between-donor mean and shrunk sd, a PCA
@@ -85,19 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the latent carried them, and a mapper that saw the counts never faced the planted scenario.
 - Frozen reference format version 3.
 
-### Planned
-- scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
-- Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
-- Plotting.
-- Cell-level frozen-expression displacement (the within-donor complement of the pseudobulk shift).
-
-## [0.1.0] - 2026-09-28
-
-Renamed from AtlasRoute and re-scoped from "donor-aware reference mapping" to a
+Earlier in the same release (2026-09-28): renamed from AtlasRoute and re-scoped from "donor-aware reference mapping" to a
 backend-independent framework for validating cellular-state transportability and gating
 downstream inference.
 
-### Added
+### Added at the rename (2026-09-28)
 - `StateReference` / `Reference`: metadata validation with group and study support, fixed-latent
   resolution (obsm key or PCA fallback), kNN baseline, `fit()`, state centroids and spread.
 - Grouped validation: `leave_one_group_out()` (donor), `leave_one_study_out()`, `random_split()`
