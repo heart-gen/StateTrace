@@ -53,7 +53,7 @@ make docs PY=.venv/bin/python
 ## Do not
 
 - Put benchmark analyses, notebooks with real data or manuscript material here; they belong
-  in `../../projects/StateTrace-benchmarking/` and `../../manuscripts/statetrace-manuscript/`.
+  in `../../projects/statetrace-benchmarking/` and `../../manuscripts/statetrace-manuscript/`.
 - Refit the latent space per fold with the built-in kNN (`refit_latent=True` is reserved for AnnData backends).
 - Add a new mapping or integration method; add adapters instead.
 - Pickle anything in the frozen reference format.
@@ -62,6 +62,6 @@ make docs PY=.venv/bin/python
 
 ## Related repositories
 
-- Benchmark and application analyses (comparators scPoli, scANVI/scArches, Symphony, scConform; gated layers): `/home/kynon/Documents/github/projects/StateTrace-benchmarking/`
+- Benchmark and application analyses (comparators scPoli, scANVI/scArches, Symphony, scConform; gated layers): `/home/kynon/Documents/github/projects/statetrace-benchmarking/`
 - Manuscript (Manubot, Genome Biology): `/home/kynon/Documents/github/manuscripts/statetrace-manuscript/`
 - First application, the NVU reference: `/home/kynon/Documents/github/projects/nvu-neuroimmune-reference/`
