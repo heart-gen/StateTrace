@@ -1,11 +1,14 @@
 # StateTrace staged roadmap
 
-Software stages, each closed by a benchmark gate, on the twelve-week schedule that ends with a
+Core software stages, each closed by a benchmark gate, on the twelve-week schedule that ends with a
 submission-ready manuscript on 2026-12-21. The benchmark repository owns the gate definitions
 (`GATES.md`, `UTILITY.md`, `configs/gates.yaml`, `configs/utility_gate.yaml`) and the weekly
 timeline (`TIMELINE.md`); this page tracks what the *software* must deliver for each gate,
 what evidence closes the stage, and which inputs from the PI it waits on. Update the summary
 table and the milestone log when a stage changes state.
+
+Stage 7 is a planned spatial extension with a separate gate and an unassigned schedule; it is
+not a requirement for the twelve-week core release.
 
 ## Summary
 
@@ -18,6 +21,7 @@ table and the milestone log when a stage changes state.
 | 4 | planned | 7 - 8 | Inference validity: downstream-validity helpers (type I error under permuted null, FDR, power, effect-size bias, replication summaries); gated versus ungated pseudobulk and differential-abundance pipeline | **G4** NVU -> SCORCH application and validity layer; **U3** decided (supported states replicate, gating controls type I error) | `G4.md`, `U3.md`; error-rate and replication tables | 0.3.0 | |
 | 5 | planned | 9 | Generalisation: ortholog `FeatureMap` on real BioMart tables; retention in the report; sensitivity analyses (thresholds, reduced features); optional cell-level frozen-expression displacement | **G5** organoid and cross-species student stages; **U4** decided (>= 3 systems, >= 3 backends) | `G5.md`, `U4.md`; frozen result set; manuscript release tag | 0.4.0 | |
 | 6 | planned | 10 - 12 | Usability and release: tutorial (two h5ads to a transport report), docs and API fixes from the usability test, PyPI and conda recipe, Zenodo DOI, clean-environment reproduction, final tag cited in the paper | **U5** a non-author produces and interprets a transport report from the docs; then one outside collaborator | `U5.md`; tutorial runtime; `env/environment.lock.txt`; Zenodo record | 1.0.0 | |
+| 7 | planned | unassigned; after core release by default | StateTrace-Spatial: boundary stability, spatial correspondence, transcript reassignment, donor/state summaries; optional CellART adapter | **G6-Spatial** (proposed): distinguish biological shift from segmentation-induced artificial novelty, with reference sensitivity assessed separately | Corruption benchmark, matched-cell and correspondence-component tables, donor/state effect sizes, independent validation, provenance and gate report | TBD | |
 
 ## Promotion rule
 
@@ -303,6 +307,52 @@ U5: a non-author produces and interprets a transport report from the docs alone;
 outside collaborator does the same on their own data. Release criteria for v1.0 in
 {doc}`roadmap`.
 
+## Stage 7: StateTrace-Spatial — distinguish mapping failure from segmentation failure
+
+### Objective
+
+Core StateTrace asks: **Is this mapped state trustworthy and is it genuinely novel?**
+StateTrace-Spatial asks: **Is that conclusion robust to how the spatial cell itself was
+reconstructed?** The new diagnostic is boundary stability. CellART is a controlled
+preprocessing perturbation and optional adapter, never a correctness oracle or a reason to
+turn StateTrace into a segmentation package. The full design is in {doc}`spatial-roadmap`.
+
+### Deliverables
+
+- Segmentation-independent input contract for cell masks, spatial transcript assignments,
+  reconstructed counts and `Predictions`, with coordinate and reference provenance.
+- Spatial correspondence that preserves one-to-one matches, splits, merges, ambiguous and
+  unmatched cells; mask IoU and transcript reassignment summaries.
+- Paired novelty, mapped-label, reference-frozen displacement and uncertainty diagnostics,
+  with a calibrated segmentation-sensitivity score and donor x state summaries.
+- Report interpretations: robust shifted state, segmentation-sensitive, identity-sensitive,
+  and robustly reference-unsupported; unavailable evidence remains explicit.
+- Optional CellART output adapter after the generic diagnostic passes synthetic checks.
+  Cell-level frozen-expression scoring from Stage 5 is a prerequisite for cell-level distance
+  deltas; donor x state pseudobulk remains the primary shift evidence.
+- A Xenium worked example; real-data runs and corruption experiments live in the benchmark
+  repository, while reusable adapters, diagnostics and synthetic tests live here.
+
+### Promotion gate
+
+**G6-Spatial is proposed, not yet registered or passed.** Before the deciding run, the
+benchmark repository must fix the dataset and donor split, independent biological-shift
+evidence, corruption doses, calibration procedure, endpoint and numerical tolerances.
+Compare native, deliberately corrupted and CellART-reconstructed segmentations. The primary
+test is improved detection of contamination-induced false novelty over novelty alone and
+mapper uncertainty at a matched donor-calibrated false-positive rate, subject to a
+prespecified minimum retention of independently supported biological shifts. Report effect
+sizes and uncertainty across held-out donors, including match coverage and split/merge cases.
+Agreement with CellART cannot satisfy the gate, especially with a shared reference.
+
+### Expected artifacts
+
+Proposed benchmark artifacts: `G6-Spatial.md`, a frozen corruption manifest, spatial
+correspondence and paired diagnostic tables, donor x state summaries, calibration and
+reference-sensitivity results, an independently validated tissue example, and software,
+benchmark, reconstruction and reference provenance. Register paths and gate configuration in
+the benchmark repository before implementation; these artifacts do not exist yet.
+
 ## Schedule
 
 Week 1 is 2026-09-29 to 2026-10-05; week 12 ends 2026-12-21. The benchmark repository's
@@ -344,3 +394,4 @@ stages run.
 | 2026-10-01 | 1 | Per-donor latent offsets for query and null (surgery places each query donor with its own displacement); expression arm amended to a discrimination criterion, recorded in `GATES.md`; rerun launched | `f1b2c65` | `833c470` | `GATES.md` Amendments |
 | 2026-10-01 | 1 | Held-out null built from assigned labels (as the query is); geometric-median latent offsets; raw and residual displacement reported; per-state AUROC made the primary expression-arm form with the within-run stress test secondary; (a) tolerance 0.03 (both in `GATES.md`, Amendments) | `ef0560a` | `15bc438` | `00_gates/_m/G0_2026-10-01_second_run.md` |
 | 2026-10-02 | 1 | Third full stage-01 run (510 cells, 10.7 h local GPU): **G0 PASS**. Pooled false rate 0.062 (scANVI 0.047, scPoli 0.078); latent-arm power margins 0.46 and 0.19; per-state expression AUROC 0.92 and 0.88; truth-category recovery 0.97 and 0.94; accuracy gap 2.3 points. v0.1.0 tagged; stage 02 unlocked | `ef0560a` (tag v0.1.0) | `def81ff` | `00_gates/_m/G0.md`, `configs/gates.yaml` |
+| 2026-10-09 | 7 | Added planned StateTrace-Spatial extension: boundary stability, optional CellART adapter, controlled segmentation-error benchmark and proposed G6-Spatial; schedule/version unassigned, no implementation or benchmark claim | pending | not registered | `docs/spatial-roadmap.md` |

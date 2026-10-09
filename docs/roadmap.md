@@ -11,7 +11,18 @@ it is comparable to or better than the main comparators on the previous layer's 
 | 0.2 | `Predictions` adapters (scPoli, scANVI, Symphony, Azimuth, CellTypist), `validate_transport`, shift diagnostics, inference gating, `compare_backends`, abundance and pseudobulk, transport report, feature harmonisation | G1 semi-synthetic perturbations on real data |
 | 0.3 | scANVI `AnnDataBackend` with per-fold refit, group-aware calibration tables, downstream-validity helpers (type I error / replication summaries) | G2 public cross-cohort (PBMC, HLCA) |
 | 0.4 | hierarchical states, plotting, CLI | G3 brain and G4 application |
-| later | genetics annotation export, spatial and multi-omic references | — |
+| TBD (Stage 7) | StateTrace-Spatial: boundary stability and segmentation sensitivity; optional CellART output adapter | G6-Spatial (proposed; criteria to be registered) |
+| later | genetics annotation export and multi-omic references | — |
+
+## Planned: StateTrace-Spatial
+
+Stage 7 adds the question **is the mapped-state conclusion robust to how the spatial cell
+was reconstructed?** It compares native, deliberately corrupted and alternative cell
+boundaries, measuring transcript reassignment, label changes and changes in novelty,
+reference-frozen displacement and uncertainty. CellART is an optional preprocessing
+perturbation, not ground truth. See {doc}`spatial-roadmap` for the benchmark design, donor-level
+evaluation, reference-sensitivity controls and implementation scope. Its schedule and version
+are unassigned; it is not a v1.0 release requirement.
 
 ## Planned: cell-level frozen-expression displacement
 

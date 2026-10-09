@@ -32,6 +32,7 @@ transport
 reference-format
 roadmap
 staged-roadmap
+spatial-roadmap
 ```
 
 ```{toctree}

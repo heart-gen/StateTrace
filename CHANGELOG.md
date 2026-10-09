@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
+- Stage 7 StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
+  benchmark design and optional CellART adapter; roadmap only, schedule and version unassigned.
 - scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
 - Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
 - Plotting.
