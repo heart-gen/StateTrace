@@ -13,4 +13,4 @@ def test_vocabularies():
     assert schema.STABILITY_CATEGORIES == ("stable", "moderate", "fragile", "insufficient")
     assert "supported_with_caution" in schema.TRANSPORT_STATUS
     assert schema.CELL_CATEGORIES == ("supported", "uncertain", "out_of_reference")
-    assert schema.FORMAT_VERSION == 3 and schema.FROZEN_SUFFIX == ".statetrace"
+    assert schema.FORMAT_VERSION == 4 and schema.FROZEN_SUFFIX == ".statetrace"

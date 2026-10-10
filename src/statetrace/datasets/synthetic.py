@@ -209,6 +209,7 @@ def simulate_transport(
     n_genes: int = 0,
     cohort_effect: float = 0.5,
     shifted_states: dict[str, float] | None = None,
+    spread_states: dict[str, float] | None = None,
     novel_states: list[str] | None = None,
     absent_states: list[str] | None = None,
     minority_states: dict[str, float] | None = None,
@@ -229,6 +230,10 @@ def simulate_transport(
     shifted_states
         ``{state: magnitude}``: the query version of the state is displaced by a random
         direction of this length (in latent units) on top of the cohort effect.
+    spread_states
+        ``{state: factor}``: the query cells of the state are scaled about their own mean by
+        this factor in the latent (a change in spread with the mean kept), the case a
+        donor-level pseudobulk mean is not built to see.
     novel_states
         States present only in the query (withheld from the reference).
     absent_states
@@ -246,7 +251,8 @@ def simulate_transport(
     reference, query, truth
         Two AnnData objects (``obs``: ``donor_id``, ``cell_state``, ``cell_type``, ``batch``,
         ``study``) and a table with the planted category per state
-        (``stable``, ``shifted``, ``novel``, ``absent``, ``minority``).
+        (``stable``, ``shifted``, ``spread``, ``novel``, ``absent``, ``minority``), the shift
+        magnitude and the spread factor.
 
     Notes
     -----
@@ -258,6 +264,7 @@ def simulate_transport(
     rng = np.random.default_rng(seed)
     states = [f"S{i}" for i in range(n_states)]
     shifted_states = dict(shifted_states or {})
+    spread_states = dict(spread_states or {})
     novel_states = list(novel_states or [])
     absent_states = list(absent_states or [])
     minority_states = dict(minority_states or {})
@@ -322,6 +329,11 @@ def simulate_transport(
         direction = rng.normal(size=n_latent)
         direction *= float(mag) / np.linalg.norm(direction)
         Z[code == states.index(s)] += direction
+    for s, factor in spread_states.items():
+        sel = code == states.index(s)
+        if sel.any():
+            centre = Z[sel].mean(axis=0)
+            Z[sel] = centre + float(factor) * (Z[sel] - centre)
     query.obsm[latent_key] = Z.astype(np.float32)
     if n_genes > 0:
         query.X = _counts_from_latent(np.random.default_rng(seed + 3), Z, shared["W"], shared["b"])
@@ -333,11 +345,14 @@ def simulate_transport(
         truth.loc[s, "truth"] = "minority"
     for s in shifted_states:
         truth.loc[s, "truth"] = "shifted"
+    for s in spread_states:
+        truth.loc[s, "truth"] = "spread"
     for s in absent_states:
         truth.loc[s, "truth"] = "absent"
     for s in novel_states:
         truth.loc[s, "truth"] = "novel"
     truth["shift_magnitude"] = [shifted_states.get(s, 0.0) for s in states]
+    truth["spread_factor"] = [spread_states.get(s, 1.0) for s in states]
     truth["ref_donor_fraction"] = [
         0.0 if s in novel_states else minority_states.get(s, 1.0) for s in states
     ]

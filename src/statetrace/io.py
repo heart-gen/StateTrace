@@ -19,7 +19,10 @@ Layout::
         validation/       ValidationResult.to_dir() output (optional)
         expression/       frozen expression space (optional, format 3): genes.json, mu.npy,
                           sigma.npy, n_groups.npy, components.npy, profiles.npy, rows.csv,
-                          null.csv, null_stats.csv, params.json
+                          null.csv, null_stats.csv, params.json; format 4 adds the held-out
+                          reference profiles (null_profiles.npy) and the cell-level
+                          space: cell_center.npy, cell_scale.npy, cell_components.npy,
+                          cell_coords.npy, cell_rows.csv
 """
 
 from __future__ import annotations
@@ -228,6 +231,12 @@ def _write_expression(space: ExpressionSpace, out: Path) -> None:
     space.null.to_csv(out / "null.csv", index=False)
     space.null_stats.to_csv(out / "null_stats.csv")
     (out / "params.json").write_text(json.dumps(space.params, indent=2, default=str))
+    if space.null_profiles is not None:
+        np.save(out / "null_profiles.npy", np.asarray(space.null_profiles, dtype=np.float32))
+    if space.has_cell_space:
+        for name in ("cell_center", "cell_scale", "cell_components", "cell_coords"):
+            np.save(out / f"{name}.npy", np.asarray(getattr(space, name), dtype=np.float32))
+        space.cell_rows.to_csv(out / "cell_rows.csv", index=False)
 
 
 def _read_expression(src: _Source, states: list[str]) -> ExpressionSpace | None:
@@ -242,6 +251,17 @@ def _read_expression(src: _Source, states: list[str]) -> ExpressionSpace | None:
 
     null_stats = pd.read_csv(_io.BytesIO(src.read(f"{d}/null_stats.csv")), index_col="state")
     null_stats.index = null_stats.index.astype(str)
+    cell: dict[str, Any] = {}
+    if src.exists(f"{d}/null_profiles.npy"):  # format 4
+        cell["null_profiles"] = arr("null_profiles.npy")
+    if src.exists(f"{d}/cell_coords.npy"):  # format 4
+        cell.update(
+            {
+                name: arr(f"{name}.npy")
+                for name in ("cell_center", "cell_scale", "cell_components", "cell_coords")
+            }
+        )
+        cell["cell_rows"] = pd.read_csv(_io.BytesIO(src.read(f"{d}/cell_rows.csv")))
     return ExpressionSpace(
         genes=np.asarray(json.loads(src.read(f"{d}/genes.json").decode())).astype(str),
         states=np.asarray(states).astype(str),
@@ -254,6 +274,7 @@ def _read_expression(src: _Source, states: list[str]) -> ExpressionSpace | None:
         null=pd.read_csv(_io.BytesIO(src.read(f"{d}/null.csv"))),
         null_stats=null_stats,
         params=json.loads(src.read(f"{d}/params.json").decode()),
+        **cell,
     )
 
 

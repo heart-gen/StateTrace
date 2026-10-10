@@ -7,13 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Two-sample engines (`statetrace.twosample`, `TwoSampleConfig`): the E-distance permutation
+  test (native; Euclidean, as in pertpy) and Rosenbaum's cross-match test through scXMatch
+  (Moeller et al., Bioinformatics 2026, doi:10.1093/bioinformatics/btag706; optional, conda
+  only). `TransportConfig(two_sample=...)` runs them for every reference state at cell level
+  (frozen cell-level space) and on donor profiles (held-out reference donors against query
+  donors), over all assigned and in-reference cells; `route.two_sample`, `two_sample.csv` and a
+  report section. Reported evidence only: `status` and `STATE_COLUMNS` are unchanged.
+- Frozen cell-level space in `ExpressionSpace` (`cell_sample_per_state`, `cell_components`,
+  `cell_seed`; `build_cell_space`, `project_cells`) and the held-out reference donor profiles
+  (`null_profiles`); `query_profiles` exposes the standardised donor profiles behind
+  `score_query`.
+- `simulate_transport(spread_states=...)`: a change in spread with the mean kept (truth
+  `spread`, column `spread_factor`).
+
+### Changed
+- `validate_transport` raises when a query group (donor) is also a reference group, unless
+  `TransportConfig(allow_group_overlap=True)` (the explicit cell-level control); it warns when
+  the reference is not frozen and records the check in `route.reference["independence"]`.
+- Frozen format 4: `expression/` adds `null_profiles.npy` and the cell-level space. Format 3
+  bundles still load; their two-sample rows read `unsupported` until re-frozen.
+- Positioning: StateTrace orchestrates shift evidence and is not a distribution-shift test
+  (README, concepts, transport guide, roadmaps).
+
 ### Planned
 - Stage 7 StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
   benchmark design and optional CellART adapter; roadmap only, schedule and version unassigned.
 - scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
 - Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
 - Plotting.
-- Cell-level frozen-expression displacement (the within-donor complement of the pseudobulk shift).
+- Within-donor localisation of a shifted subpopulation (per-cell displacement against held-out
+  reference cells); the state-level cell tests above are done.
 
 ## [0.1.0] - 2026-10-02
 

@@ -37,6 +37,7 @@ from . import novelty, schema
 from .aggregation import pseudobulk as _pseudobulk
 from .aggregation import state_abundance as _state_abundance
 from .predictions import Predictions
+from .twosample import TwoSampleConfig
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -175,6 +176,16 @@ class TransportConfig:
         exist); ``"in_sample"`` always uses the reference's own cells.
     require_reference_validation
         Treat an unvalidated reference state as ``moderate`` (caution) rather than ``stable``.
+    two_sample
+        A :class:`~statetrace.twosample.TwoSampleConfig` runs the two-sample engines
+        (E-distance, scXMatch) of every reference state against its assigned query cells and
+        donor profiles in the frozen space; the result is ``route.two_sample``. ``None``
+        (default) runs none. The engines are reported evidence: they never change
+        ``status``, which the predeclared rule above decides.
+    allow_group_overlap
+        The query must be independent of the reference: by default a query group (donor)
+        that is also a reference group raises. ``True`` is reserved for the explicit cell-level control (a random split that ignores
+        donors) and is recorded in ``route.reference["independence"]``.
     """
 
     min_cells_per_group: int = 20
@@ -205,6 +216,8 @@ class TransportConfig:
     novelty_calibration: str = "holdout"
     shift_source: str = "auto"
     expression_layer: str | None = None
+    two_sample: TwoSampleConfig | None = None
+    allow_group_overlap: bool = False
 
     def __post_init__(self) -> None:
         if self.shift_source not in ("auto", "expression", "latent"):
@@ -229,6 +242,8 @@ class TransportConfig:
             raise ValueError("min_support must lie in [0, 1] or be None")
         if self.support_neighbors < 1:
             raise ValueError("support_neighbors must be >= 1")
+        if self.two_sample is not None and not isinstance(self.two_sample, TwoSampleConfig):
+            raise TypeError("two_sample must be a TwoSampleConfig or None")
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -301,6 +316,11 @@ class TransportRoute:
         (``None`` when the diagnostic did not run): ``group``, ``state``, ``n_cells``,
         ``distance``, ``distance_pc``, ``residual``, ``nearest``, ``genes_beyond``,
         ``shift_z``, ``shift_p`` and ``in_reference_only``.
+    two_sample
+        Two-sample tests of each reference state against its query cells and donor profiles
+        (``None`` unless ``TransportConfig.two_sample`` was set); see
+        :func:`statetrace.twosample.state_tests`. Reported evidence only: never an input to
+        ``status``.
     """
 
     group_key: str
@@ -314,6 +334,7 @@ class TransportRoute:
     statetrace_version: str
     query: Any = field(default=None, repr=False)
     expression: pd.DataFrame | None = field(default=None, repr=False)
+    two_sample: pd.DataFrame | None = field(default=None, repr=False)
 
     @property
     def supported_states(self) -> list[str]:
@@ -468,8 +489,11 @@ def _expression_shift(
     in_reference: np.ndarray,
     cfg: TransportConfig,
     feature_map: FeatureMap | None,
-) -> tuple[pd.DataFrame | None, dict[str, Any]]:
-    """Score query donor x state pseudobulks (all assigned cells, and in-reference cells only)."""
+) -> tuple[pd.DataFrame | None, dict[str, Any], pd.DataFrame | None, dict[str, Any] | None]:
+    """
+    Score query donor x state pseudobulks (all assigned cells, and in-reference cells only)
+    and, when ``cfg.two_sample`` is set, run the two-sample engines on the same genes.
+    """
     from .features import harmonize_features
 
     space = reference.expression_
@@ -483,7 +507,7 @@ def _expression_shift(
             UserWarning,
             stacklevel=3,
         )
-        return None, {"available": False, "feature_retention": 0.0}
+        return None, {"available": False, "feature_retention": 0.0}, None, None
     gene_pos = pd.Index(space.genes).get_indexer(mapping["reference"].to_numpy())
     order = np.argsort(gene_pos)
     gene_pos = gene_pos[order]
@@ -516,7 +540,61 @@ def _expression_shift(
     table = pd.concat([t for t, _ in tables], ignore_index=True)
     table["group"] = np.asarray(group_names).astype(str)[table["group"].to_numpy()]
     prov = {"available": True, **tables[0][1]}
-    return table, prov
+    two_table, two_prov = None, None
+    if cfg.two_sample is not None:
+        from .twosample import state_tests
+
+        two_table, two_prov = state_tests(
+            space,
+            X,
+            group_codes,
+            state_codes,
+            in_reference,
+            gene_index=gene_pos,
+            min_cells_per_group=cfg.min_cells_per_group,
+            correct_cohort_offset=cfg.correct_cohort_offset,
+            config=cfg.two_sample,
+        )
+    return table, prov, two_table, two_prov
+
+
+def _check_independence(
+    reference: StateReference, query: AnnData, group_key: str, cfg: TransportConfig
+) -> dict[str, Any]:
+    """
+    The query must not share a group (donor) with the reference that defined the states:
+    cells of one donor on both sides make every shift or two-sample test circular. Shared
+    cell names are only counted, because barcodes repeat across independent libraries.
+    """
+    q_groups = set(query.obs[group_key].astype(str))
+    shared_groups = sorted(q_groups & set(np.asarray(reference.groups_).astype(str)))
+    ref_cells = reference.obs_names_
+    shared_cells = (
+        int(np.isin(np.asarray(query.obs_names).astype(str), ref_cells).sum())
+        if ref_cells is not None
+        else 0
+    )
+    if shared_groups and not cfg.allow_group_overlap:
+        raise ValueError(
+            f"{len(shared_groups)} query groups are also reference groups (e.g. "
+            f"{shared_groups[:3]}): states must be defined without the query. Hold these "
+            "donors out of the reference (or rename coincidentally equal identifiers), or pass "
+            "TransportConfig(allow_group_overlap=True) for an explicit cell-level control."
+        )
+    if not reference.is_frozen:
+        warnings.warn(
+            "the reference is not frozen; freeze() it before reading the query so that no "
+            "query can influence the states it is tested against.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return {
+        "state_definition": "frozen_reference" if reference.is_frozen else "fitted_reference",
+        "query_in_state_definition": False,
+        "shared_groups": len(shared_groups),
+        "shared_cell_names": shared_cells,
+        "allow_group_overlap": bool(cfg.allow_group_overlap),
+    }
 
 
 def validate_transport(
@@ -567,6 +645,7 @@ def validate_transport(
         raise RuntimeError("fit() the reference before validating transport")
     if group_key not in query.obs:
         raise KeyError(f"query.obs[{group_key!r}] not found")
+    independence = _check_independence(reference, query, group_key, cfg)
     states = np.asarray(reference.states_).astype(str)
     pos = {s: i for i, s in enumerate(states)}
 
@@ -747,6 +826,8 @@ def validate_transport(
     # frozen biological space: donor x state pseudobulk shift
     expr_table: pd.DataFrame | None = None
     expr_prov: dict[str, Any] = {"available": False}
+    two_table: pd.DataFrame | None = None
+    two_prov: dict[str, Any] | None = None
     expr_shift = np.full(len(states), np.nan)
     expr_shift_in = np.full(len(states), np.nan)
     expr_shift_raw = np.full(len(states), np.nan)
@@ -754,7 +835,7 @@ def validate_transport(
     groups_scored = np.zeros(len(states), dtype=int)
     want_expr = cfg.shift_source in ("auto", "expression")
     if want_expr and reference.expression_ is not None and query.n_vars > 0:
-        expr_table, expr_prov = _expression_shift(
+        expr_table, expr_prov, two_table, two_prov = _expression_shift(
             reference, query, group_codes_q, group_names_q, codes, in_ref, cfg, feature_map
         )
         if expr_table is not None:
@@ -770,7 +851,14 @@ def validate_transport(
                 high=cfg.shift_high,
             )
             expr_table["state"] = states[expr_table["state"].to_numpy()]
-    elif cfg.shift_source == "expression":
+    if cfg.two_sample is not None and two_prov is None:
+        warnings.warn(
+            "two_sample engines requested but the reference carries no expression space, the "
+            "query has none of its genes, or shift_source='latent'; route.two_sample is empty.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if cfg.shift_source == "expression" and (reference.expression_ is None or query.n_vars == 0):
         warnings.warn(
             "shift_source='expression' but the reference carries no expression space or the "
             "query has no genes; shift is unknown.",
@@ -1022,11 +1110,14 @@ def validate_transport(
                 else None
             ),
             "expression": expr_prov,
+            "two_sample": two_prov,
+            "independence": independence,
         },
         created=datetime.now(UTC).isoformat(timespec="seconds"),
         statetrace_version=__version__,
         query=query if keep_query else None,
         expression=expr_table,
+        two_sample=two_table,
     )
     logger.info("transport: %s", route.summary().replace("\n", " | "))
     return route
@@ -1039,6 +1130,8 @@ def route_to_dir(route: TransportRoute, path: str | Path, *, include_cells: bool
     route.groups.to_csv(path / "groups.csv", index=False)
     if include_cells:
         route.cells.to_csv(path / "cells.csv.gz", index_label="cell")
+    if route.two_sample is not None:
+        route.two_sample.to_csv(path / "two_sample.csv", index=False)
     (path / "config.json").write_text(
         json.dumps(
             {

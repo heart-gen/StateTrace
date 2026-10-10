@@ -80,6 +80,13 @@ class ExpressionConfig:
     offset_min_states
         Minimum states a donor must carry for its own offset to be estimated; donors with
         fewer states receive the cohort-wide median offset instead.
+    cell_sample_per_state, cell_components, cell_seed
+        The frozen *cell-level* space for the two-sample tests of :mod:`statetrace.twosample`:
+        at most ``cell_sample_per_state`` reference cells per state (seeded with
+        ``cell_seed``) are log-normalised over the selected genes, standardised gene-wise and
+        projected onto ``cell_components`` principal components fitted on those reference
+        cells only. Only the projected coordinates, the gene-wise centre and scale and the
+        loadings are frozen; ``cell_sample_per_state=0`` disables the cell-level space.
     """
 
     layer: str | None = None
@@ -92,6 +99,9 @@ class ExpressionConfig:
     beyond_z: float = 2.0
     group_offset: bool = True
     offset_min_states: int = 3
+    cell_sample_per_state: int = 500
+    cell_components: int = 50
+    cell_seed: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         import dataclasses
@@ -122,6 +132,15 @@ class ExpressionSpace:
         Per-state ``n_holdout``, ``mean``, ``sd``, ``q95``, ``q99`` of the held-out distance.
     params
         The :class:`ExpressionConfig` used plus the input kind.
+    null_profiles
+        Held-out standardised profiles of the reference donors, aligned with ``null`` (each
+        donor scored against the space rebuilt without it, offsets removed); ``None`` when
+        read from a format-3 bundle.
+    cell_center, cell_scale, cell_components, cell_coords, cell_rows
+        The frozen cell-level space (``None`` when disabled or read from a format-3 bundle):
+        gene-wise centre and scale of the sampled reference cells' log-normalised expression,
+        PCA loadings ``(n_cell_components, n_genes)``, the sampled reference cells'
+        coordinates ``(n_sampled, n_cell_components)`` and their ``group`` and ``state`` codes.
     """
 
     genes: np.ndarray
@@ -135,6 +154,17 @@ class ExpressionSpace:
     null: pd.DataFrame
     null_stats: pd.DataFrame
     params: dict[str, Any] = field(default_factory=dict)
+    null_profiles: np.ndarray | None = None
+    cell_center: np.ndarray | None = None
+    cell_scale: np.ndarray | None = None
+    cell_components: np.ndarray | None = None
+    cell_coords: np.ndarray | None = None
+    cell_rows: pd.DataFrame | None = None
+
+    @property
+    def has_cell_space(self) -> bool:
+        """Whether the frozen cell-level space for the two-sample tests is present."""
+        return self.cell_coords is not None and self.cell_components is not None
 
     @property
     def n_genes(self) -> int:
@@ -342,10 +372,22 @@ def remove_group_offsets(
 
 
 def holdout_null(
-    profiles: np.ndarray, rows: pd.DataFrame, n_states: int, cfg: ExpressionConfig
-) -> pd.DataFrame:
-    """Score every reference donor x state profile against a space rebuilt without that donor."""
+    profiles: np.ndarray,
+    rows: pd.DataFrame,
+    n_states: int,
+    cfg: ExpressionConfig,
+    *,
+    return_profiles: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, np.ndarray]:
+    """
+    Score every reference donor x state profile against a space rebuilt without that donor.
+
+    With ``return_profiles`` also return the held-out standardised profiles (offsets removed
+    exactly as for scoring), aligned with the rows of the table: reference donors seen the
+    way a query donor is seen, the reference side of the donor-level two-sample tests.
+    """
     records = []
+    held_Z: list[np.ndarray] = []
     for d in np.unique(rows["group"].to_numpy()):
         held = rows["group"].to_numpy() == d
         fit = _fit(profiles[~held], rows[~held].reset_index(drop=True), n_states, cfg)
@@ -377,9 +419,12 @@ def holdout_null(
         m.insert(0, "state", st)
         m.insert(0, "group", int(d))
         records.append(m)
+        held_Z.append(Z)
     if not records:
-        return pd.DataFrame(columns=list(NULL_COLUMNS))
-    return pd.concat(records, ignore_index=True)[list(NULL_COLUMNS)]
+        empty = pd.DataFrame(columns=list(NULL_COLUMNS))
+        return (empty, np.zeros((0, profiles.shape[1]))) if return_profiles else empty
+    table = pd.concat(records, ignore_index=True)[list(NULL_COLUMNS)]
+    return (table, np.vstack(held_Z)) if return_profiles else table
 
 
 def null_statistics(null: pd.DataFrame, n_states: int, states: np.ndarray) -> pd.DataFrame:
@@ -475,8 +520,17 @@ def build_expression_space(
     profiles = profiles[:, idx]
     genes = genes_all[idx]
     fit = _fit(profiles, rows, n_states, cfg)
-    null = holdout_null(profiles, rows, n_states, cfg)
+    null, null_profiles = holdout_null(profiles, rows, n_states, cfg, return_profiles=True)
     stats = null_statistics(null, n_states, np.asarray(states).astype(str))
+    cell = build_cell_space(
+        X,
+        group_codes,
+        state_codes,
+        gene_index=idx,
+        n_states=n_states,
+        counts=counts,
+        config=cfg,
+    )
     space = ExpressionSpace(
         genes=genes,
         states=np.asarray(states).astype(str),
@@ -493,9 +547,113 @@ def build_expression_space(
             "input": "counts" if counts else "non_count",
             "n_genes_input": int(len(genes_all)),
         },
+        null_profiles=null_profiles.astype(np.float32),
+        **cell,
     )
     logger.info(space.summary())
     return space
+
+
+# ----------------------------------------------------------------------- cell space
+CELL_CLIP = 10.0  # standardised cell values are clipped to +/- this (scanpy's scale convention)
+
+
+def _cell_values(X: Any, *, counts: bool, target_sum: float) -> np.ndarray:
+    """Dense log-normalised values of a cells x genes block (library over the given genes)."""
+    from scipy import sparse
+
+    V = np.asarray(X.todense() if sparse.issparse(X) else X, dtype=np.float64)
+    if not counts:
+        return V
+    lib = V.sum(axis=1, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        V = np.where(lib > 0, V / lib * float(target_sum), 0.0)
+    return np.log1p(V)
+
+
+def _standardise_cells(V: np.ndarray, center: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    return np.clip((V - center) / scale, -CELL_CLIP, CELL_CLIP)
+
+
+def build_cell_space(
+    X: Any,
+    group_codes: np.ndarray,
+    state_codes: np.ndarray,
+    *,
+    gene_index: np.ndarray,
+    n_states: int,
+    counts: bool,
+    config: ExpressionConfig,
+) -> dict[str, Any]:
+    """
+    The frozen cell-level space: a seeded sample of at most ``cell_sample_per_state``
+    reference cells per state, log-normalised over the selected genes, standardised gene-wise
+    and projected onto principal components fitted on those reference cells only.
+
+    Returns the keyword arguments of :class:`ExpressionSpace` that hold it (all ``None`` when
+    the space is disabled or fewer than two cells are available).
+    """
+    empty = {
+        "cell_center": None,
+        "cell_scale": None,
+        "cell_components": None,
+        "cell_coords": None,
+        "cell_rows": None,
+    }
+    if config.cell_sample_per_state <= 0 or config.cell_components <= 0:
+        return empty
+    rng = np.random.default_rng(config.cell_seed)
+    g = np.asarray(group_codes)
+    s = np.asarray(state_codes)
+    picked = []
+    for k in range(n_states):
+        pool = np.flatnonzero((s == k) & (g >= 0))
+        if pool.size > config.cell_sample_per_state:
+            pool = np.sort(rng.choice(pool, size=config.cell_sample_per_state, replace=False))
+        picked.append(pool)
+    cells = np.concatenate(picked) if picked else np.zeros(0, dtype=int)
+    if cells.size < 2:
+        return empty
+    V = _cell_values(X[cells][:, gene_index], counts=counts, target_sum=config.target_sum)
+    center = V.mean(axis=0)
+    scale = np.maximum(V.std(axis=0, ddof=1), 1e-2)
+    Z = _standardise_cells(V, center, scale)
+    comps = _pca(Z, config.cell_components)
+    coords = Z @ comps.T  # uncentred, exactly as project_cells() places query cells
+    return {
+        "cell_center": center.astype(np.float32),
+        "cell_scale": scale.astype(np.float32),
+        "cell_components": comps.astype(np.float32),
+        "cell_coords": coords.astype(np.float32),
+        "cell_rows": pd.DataFrame({"group": g[cells].astype(int), "state": s[cells].astype(int)}),
+    }
+
+
+def project_cells(
+    space: ExpressionSpace,
+    X: Any,
+    *,
+    gene_index: np.ndarray | None = None,
+    counts: bool | None = None,
+) -> np.ndarray:
+    """
+    Coordinates of query cells in the frozen cell-level space.
+
+    ``X`` holds the query cells x genes aligned to ``space.genes[gene_index]``. Genes of the
+    space that the query lacks are set to the reference centre (standardised value 0), which
+    pulls the query towards the reference; the retention is reported by the caller.
+    """
+    if not space.has_cell_space:
+        raise ValueError("the expression space carries no cell-level space")
+    idx = np.arange(space.n_genes) if gene_index is None else np.asarray(gene_index)
+    input_counts = counts_like(X) if counts is None else bool(counts)
+    V = _cell_values(X, counts=input_counts, target_sum=float(space.params.get("target_sum", 1e4)))
+    center = np.asarray(space.cell_center, dtype=np.float64)
+    scale = np.asarray(space.cell_scale, dtype=np.float64)
+    Z = np.zeros((V.shape[0], space.n_genes))
+    Z[:, idx] = _standardise_cells(V, center[idx], scale[idx])
+    comps = np.asarray(space.cell_components, dtype=np.float64)
+    return Z @ comps.T
 
 
 # ---------------------------------------------------------------------------- query
@@ -522,6 +680,85 @@ def estimate_cohort_offset(
     if len(per_state) < min_states:
         return None
     return np.median(np.vstack(per_state), axis=0)
+
+
+def query_profiles(
+    space: ExpressionSpace,
+    X: Any,
+    group_codes: np.ndarray,
+    state_codes: np.ndarray,
+    *,
+    gene_index: np.ndarray | None = None,
+    min_cells: int = 20,
+    correct_cohort_offset: bool = True,
+    counts: bool | None = None,
+) -> dict[str, Any]:
+    """
+    Standardised query and reference donor x state profiles in the frozen space, with the
+    offsets of :func:`score_query` removed; the shared first half of :func:`score_query`
+    (also consumed by the donor-level two-sample tests of :mod:`statetrace.twosample`).
+
+    Returns a dict with ``Z`` / ``Z_raw`` (query rows with and without offset removal),
+    ``rows`` and ``states`` (their group and state codes), ``ref_Z`` / ``ref_Z_raw``,
+    ``ref_rows`` and ``ref_states`` (the reference rows, offsets removed the same way), and
+    the offsets applied.
+    """
+    idx = np.arange(space.n_genes) if gene_index is None else np.asarray(gene_index)
+    sub = _subset(space, idx)
+    input_counts = counts_like(X) if counts is None else bool(counts)
+    profiles, rows = pseudobulk_profiles(
+        X,
+        group_codes,
+        state_codes,
+        min_cells=min_cells,
+        counts=input_counts,
+        target_sum=float(space.params.get("target_sum", 1e4)),
+    )
+    st = rows["state"].to_numpy()
+    Z = (profiles - sub["mu"][st]) / sub["sigma"][st]
+    ok = np.isfinite(Z).all(axis=1)
+    Z, rows, st = Z[ok], rows[ok].reset_index(drop=True), st[ok]
+    offset = None
+    per_group = bool(space.params.get("group_offset", False))
+    min_states = int(space.params.get("offset_min_states", 3))
+    ref_rows = space.rows
+    ref_st = ref_rows["state"].to_numpy()
+    ref_Z = (sub["profiles"] - sub["mu"][ref_st]) / sub["sigma"][ref_st]
+    ref_ok = np.isfinite(ref_Z).all(axis=1)
+    ref_Z = ref_Z[ref_ok]
+    ref_Z_raw = ref_Z
+    Z_raw = Z
+    applied: dict[int, np.ndarray] = {}
+    if correct_cohort_offset and len(rows):
+        if per_group:
+            Z, offset, applied = remove_group_offsets(
+                Z, rows["group"].to_numpy(), min_states=min_states
+            )
+        else:
+            offset = estimate_cohort_offset(Z, st, min_states=min_states)
+            if offset is not None:
+                Z = Z - offset
+                applied = {int(d): offset for d in np.unique(rows["group"].to_numpy())}
+    if per_group:
+        ref_Z, _, _ = remove_group_offsets(
+            ref_Z, ref_rows.loc[ref_ok, "group"].to_numpy(), min_states=min_states
+        )
+    return {
+        "idx": idx,
+        "sub": sub,
+        "input_counts": input_counts,
+        "Z": Z,
+        "Z_raw": Z_raw,
+        "rows": rows,
+        "states": st,
+        "ref_Z": ref_Z,
+        "ref_Z_raw": ref_Z_raw,
+        "ref_rows": ref_rows[ref_ok].reset_index(drop=True),
+        "ref_states": ref_st[ref_ok],
+        "offset": offset,
+        "applied": applied,
+        "per_group": per_group,
+    }
 
 
 def score_query(
@@ -567,46 +804,20 @@ def score_query(
         held-out null of that state) and ``shift_p`` (empirical upper-tail probability);
         provenance records the cohort offset size and feature retention.
     """
-    idx = np.arange(space.n_genes) if gene_index is None else np.asarray(gene_index)
-    sub = _subset(space, idx)
-    input_counts = counts_like(X) if counts is None else bool(counts)
-    profiles, rows = pseudobulk_profiles(
+    q = query_profiles(
+        space,
         X,
         group_codes,
         state_codes,
+        gene_index=gene_index,
         min_cells=min_cells,
-        counts=input_counts,
-        target_sum=float(space.params.get("target_sum", 1e4)),
+        correct_cohort_offset=correct_cohort_offset,
+        counts=counts,
     )
-    st = rows["state"].to_numpy()
-    Z = (profiles - sub["mu"][st]) / sub["sigma"][st]
-    ok = np.isfinite(Z).all(axis=1)
-    Z, rows, st = Z[ok], rows[ok].reset_index(drop=True), st[ok]
-    offset = None
-    per_group = bool(space.params.get("group_offset", False))
-    min_states = int(space.params.get("offset_min_states", 3))
-    ref_rows = space.rows
-    ref_st = ref_rows["state"].to_numpy()
-    ref_Z = (sub["profiles"] - sub["mu"][ref_st]) / sub["sigma"][ref_st]
-    ref_ok = np.isfinite(ref_Z).all(axis=1)
-    ref_Z = ref_Z[ref_ok]
-    ref_Z_raw = ref_Z
-    Z_raw = Z
-    applied: dict[int, np.ndarray] = {}
-    if correct_cohort_offset and len(rows):
-        if per_group:
-            Z, offset, applied = remove_group_offsets(
-                Z, rows["group"].to_numpy(), min_states=min_states
-            )
-        else:
-            offset = estimate_cohort_offset(Z, st, min_states=min_states)
-            if offset is not None:
-                Z = Z - offset
-                applied = {int(d): offset for d in np.unique(rows["group"].to_numpy())}
-    if per_group:
-        ref_Z, _, _ = remove_group_offsets(
-            ref_Z, ref_rows.loc[ref_ok, "group"].to_numpy(), min_states=min_states
-        )
+    idx, sub, input_counts = q["idx"], q["sub"], q["input_counts"]
+    Z, Z_raw, rows, st = q["Z"], q["Z_raw"], q["rows"], q["states"]
+    ref_Z, ref_Z_raw, ref_st = q["ref_Z"], q["ref_Z_raw"], q["ref_states"]
+    offset, applied, per_group = q["offset"], q["applied"], q["per_group"]
     beyond = float(space.params.get("beyond_z", 2.0))
     if len(rows):
         m = score_profiles(
@@ -614,7 +825,7 @@ def score_query(
             st,
             components=sub["components"],
             reference_Z=ref_Z,
-            reference_states=ref_st[ref_ok],
+            reference_states=ref_st,
             beyond_z=beyond,
         )
         # the same profiles before any offset removal, against the uncentred reference rows:
@@ -624,7 +835,7 @@ def score_query(
             st,
             components=sub["components"],
             reference_Z=ref_Z_raw,
-            reference_states=ref_st[ref_ok],
+            reference_states=ref_st,
             beyond_z=beyond,
         )
         m["distance_raw"] = m_raw["distance"].to_numpy()

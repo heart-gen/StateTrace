@@ -9,13 +9,18 @@
   answers whether a state is reproducible across donors, transports into an independent cohort,
   is robust to the backend, is shifted or out of reference, and is **supported** for inference.
 - Its unique modules: grouped validation, state reproducibility, cross-cohort transportability,
-  backend robustness, distribution-shift diagnostics, inference gating, transport report.
+  backend robustness, shift and novelty diagnostics, inference gating, transport report.
+- It is not a distribution-shift test. scXMatch (cross-match; Bioinformatics 2026, btag706) and
+  the E-distance answer whether two sets of profiles differ; `statetrace.twosample` runs them as
+  optional engines and *reports* them next to the status, which the donor-level pseudobulk rule
+  decides. Do not re-implement or out-compete them; orchestrate them.
 - It does not compete with mappers on cell-level accuracy and does not re-implement conformal
   calibration (scConform); its calibration question is group-aware.
 - **Donors, not cells, are the replication unit.** Every metric that reaches a user must
   exist at donor level; cell-level accuracy is reported separately, never as a proxy.
 - **Freeze before query.** A reference is written once (`freeze()`), checksummed, and never
-  redefined by a query.
+  redefined by a query. States are never inferred from the data they are tested on;
+  `validate_transport` refuses a query that shares a donor with the reference.
 - **Abstention is a result.** `unknown` is a valid assignment, never a failure.
 - Disease-, tissue- and atlas-agnostic. Project-specific keys (NVU: `donor_id`,
   `state_cluster`, `broad_cell_class`, `X_scVI`) live in the benchmark repository's

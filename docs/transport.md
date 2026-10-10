@@ -185,6 +185,43 @@ missing the distance is computed on the retained genes and compared with a null 
 of them; a warning is raised below 90 % retention and the retention is recorded in
 `route.reference["expression"]`.
 
+## Two-sample engines (reported, not decisive)
+
+`TransportConfig(two_sample=TwoSampleConfig(...))` adds `route.two_sample`
+({func}`statetrace.twosample.state_tests`): for every reference state, a two-sample test of the
+reference against the query cells assigned to it, by each engine, at two levels and over two
+subsets (all assigned cells, and in-reference cells only).
+
+| engine | test | needs |
+|---|---|---|
+| `edistance` | E-distance permutation test (Peidli et al. 2024; Euclidean, `n^2` within-group means as in pertpy, the larger side subsampled to the smaller) | nothing |
+| `scxmatch` | Rosenbaum's cross-match test via scXMatch (Moeller et al. 2026, doi:10.1093/bioinformatics/btag706; kNN graph with `k`, squared Euclidean) | `conda install scxmatch -c conda-forge -c bioconda` |
+
+| level | reference side | query side |
+|---|---|---|
+| `cell` | up to `ExpressionConfig.cell_sample_per_state` reference cells per state, frozen in the cell-level space (log-normalised over the space's genes, standardised and projected on `cell_components` PCs fitted on those reference cells) | the assigned query cells, projected with the frozen scale and loadings |
+| `donor` | the held-out reference donor profiles of the state (each donor standardised against the space rebuilt without it: the donors of the pseudobulk null) | the query donor x state profiles, standardised and offset-corrected the same way |
+
+Each row has `statistic` (the E-distance, or scXMatch's z-score), `p_value`, `z_score`, for
+scXMatch `effect_strength_ratio` and `coverage`, the sizes and donors on each side, and a
+`status` (`ok`, `unsupported` when the engine or the frozen cell space is missing, `skipped`
+when a side is below `min_cells` or `min_groups`, `error`) with a `reason`. The table is
+written to `two_sample.csv` and summarised in the report.
+
+These tests never change `status`. Two readings matter. First, a cell-level test treats cells
+of one donor as independent: a query of genuinely new, unshifted donors already differs from
+the reference's donors at cell level, so a significant cell-level p-value alone is not a
+transport failure; the donor-level row is the replicate-aware version of the same test.
+Second, a two-sample test asks whether *any* difference exists, while the pseudobulk shift asks
+whether the difference exceeds the reference's own between-donor variation, which is what
+donor-level inference needs. The cell-level tests are the sensitive evidence for a change in
+spread, which a pseudobulk mean is not built to see.
+
+The tests compare frozen reference states with mapper assignments; nothing about the states is
+inferred from the query (see {doc}`concepts`, *Freeze before you look at the query*). A query
+sharing a donor with the reference raises unless `allow_group_overlap=True` (the explicit
+cell-level control); `route.reference["independence"]` records the check.
+
 ## Cohort offset
 
 An effect that moves all of a donor's cells the same way is estimated and removed before the
