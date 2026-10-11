@@ -1077,6 +1077,13 @@ def validate_transport(
                 and reference.distance_calibration_ is not None
                 else ("in_sample" if Z is not None else None)
             ),
+            "novelty_calibration_unit": (
+                reference.validation_.config.calibration_unit
+                if Z is not None
+                and cfg.novelty_calibration == "holdout"
+                and reference.distance_calibration_ is not None
+                else None
+            ),
             "confidence_source": confidence_source,
             "support": {
                 "source": support_source,

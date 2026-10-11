@@ -602,3 +602,81 @@ def test_raw_and_residual_displacement_are_both_reported(validated_ref, transpor
     assert (gr["latent_offset_sd"] >= 0).all()
     text = (route.report(tmp_path / "rep") / "report.md").read_text()
     assert "raw/residual" in text and "| donor |" in text
+
+
+def _four_studies(seed: int = 1, study_state_effect: float = 1.0, drop: str | None = None):
+    """16 donors in 4 studies with a state-specific study effect; study st3 is the query."""
+    from statetrace.datasets import simulate_reference
+
+    a = simulate_reference(
+        n_donors=16,
+        n_states=4,
+        n_cells_per_donor=150,
+        donor_effect=0.5,
+        state_separation=4.0,
+        n_latent=10,
+        n_genes=0,
+        seed=seed,
+    )
+    rng = np.random.default_rng(seed + 100)
+    study = a.obs["donor_id"].cat.codes.to_numpy() // 4
+    state = a.obs["cell_state"].cat.codes.to_numpy()
+    a.obs["study"] = pd.Categorical([f"st{k}" for k in study])
+    eta = rng.normal(0.0, study_state_effect, size=(4, 4, 10))
+    a.obsm["X_latent"] = (a.obsm["X_latent"] + eta[study, state]).astype(np.float32)
+    keep = study < 3
+    if drop is not None:  # the state is seen in study st0 only
+        keep &= (study == 0) | (a.obs["cell_state"].to_numpy() != drop)
+    ref, qry = a[keep].copy(), a[study == 3].copy()
+    for d in (ref, qry):
+        for c in ("donor_id", "study", "cell_state"):
+            d.obs[c] = d.obs[c].cat.remove_unused_categories()
+    return ref, qry
+
+
+def test_study_calibration_holds_false_rate_on_a_new_study():
+    from statetrace import LODOConfig
+
+    ref_adata, qry = _four_studies()
+    cfg = TransportConfig(ood_rule="quantile", ood_quantile=0.95)
+    frac, cal = {}, {}
+    for unit in ("group", "study"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = Reference(ref_adata.copy(), study_key="study", **REF_KW).fit()
+            res = ref.leave_one_group_out(calibration_unit=unit)
+            route = validate_transport(
+                ref, qry, group_key="donor_id", query_state_key="cell_state", config=cfg
+            )
+        assert route.reference["novelty_calibration_unit"] == unit
+        assert (res.distance_calibration["calibration_unit"] == unit).all()
+        cal[unit] = res.distance_calibration
+        frac[unit] = (route.cells["category"] == "out_of_reference").mean()
+    # every query state is intact: the donor-level null misses the study effect
+    assert frac["group"] > 0.12 and frac["study"] < 0.10
+    assert (cal["study"]["q95_holdout"] > cal["group"]["q95_holdout"]).all()
+    ev = res.holdout_evidence
+    assert set(ev["unit"]) == {"study"} and ev["group"].isin(ref_adata.obs["donor_id"]).all()
+    with pytest.raises(ValueError, match="calibration_unit"):
+        LODOConfig(calibration_unit="donor")
+
+
+def test_study_calibration_falls_back_per_state(tmp_path):
+    from statetrace.validation import ValidationResult
+
+    ref_adata, _ = _four_studies(drop="S3")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), study_key="study", **REF_KW).fit()
+        res = ref.leave_one_group_out(calibration_unit="study")
+    units = res.distance_calibration["calibration_unit"]
+    assert units["S3"] == "group" and (units.drop("S3") == "study").all()
+    assert res.distance_calibration["q95_holdout"].notna().all()
+    back = ValidationResult.from_dir(res.to_dir(tmp_path / "val"))
+    assert back.config.calibration_unit == "study"
+    assert list(back.distance_calibration["calibration_unit"]) == list(units)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        no_study = Reference(ref_adata.copy(), **REF_KW).fit()
+        with pytest.raises(ValueError, match="study labels"):
+            no_study.leave_one_group_out(calibration_unit="study")

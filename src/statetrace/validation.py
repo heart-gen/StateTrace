@@ -76,6 +76,17 @@ class LODOConfig:
         Reserved; ``True`` raises :class:`NotImplementedError`.
     random_state
         Seed for the random-split fold assignment.
+    calibration_unit
+        Holdout unit behind the novelty null (held-out distances, their quantiles and the
+        population thresholds) of a leave-one-group-out run. ``"group"`` (default) holds out
+        one group (donor) at a time. ``"study"`` holds out one study at a time, removing each
+        held-out donor's own latent offset as for a query donor, so the null carries the
+        between-study differences an offset does not remove, which is what a query from a new
+        study brings; it needs study labels (``study_key``) with at least two studies. A state
+        with fewer than ``thresholds.min_groups`` held-out groups of ``min_group_cells`` cells
+        in the study holdout (for instance a state seen in one study only) keeps the
+        group-holdout null; ``distance_calibration["calibration_unit"]`` records which one each
+        state uses. Reproducibility always comes from the group holdout.
     """
 
     min_group_cells: int = 20
@@ -85,6 +96,14 @@ class LODOConfig:
     n_jobs: int = 1
     refit_latent: bool = False
     random_state: int = 0
+    calibration_unit: str = "group"
+
+    def __post_init__(self) -> None:
+        if self.calibration_unit not in schema.CALIBRATION_UNITS:
+            raise ValueError(
+                f"calibration_unit must be one of {schema.CALIBRATION_UNITS}, "
+                f"got {self.calibration_unit!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -375,6 +394,44 @@ def _run_fold_array(backend: MappingBackend, X, y, groups, test, states, fold_na
     )
 
 
+def _study_holdout_evidence(
+    backend, X, y, groups, study_labels, obs_names, states, state_codes, config
+) -> pd.DataFrame:
+    """Held-out novelty evidence with one study held out at a time (offsets removed per group)."""
+    if study_labels is None:
+        raise ValueError("calibration_unit='study' needs study labels (construct with study_key)")
+    if not (isinstance(backend, MappingBackend) and not isinstance(backend, AnnDataBackend)):
+        raise ValueError("calibration_unit='study' needs an array backend")
+    studies = np.asarray([str(s) for s in study_labels], dtype=object)
+    folds = logo_folds(studies)
+    if len(folds) < 2:
+        raise ValueError("calibration_unit='study' needs at least two studies")
+    obs = np.asarray(obs_names).astype(str)
+    idx = np.concatenate([obs[m] for _, m in folds])
+    cp = pd.concat(
+        [
+            _run_fold_array(backend, X, y, groups, m, states, name, config.abstain_below)
+            for name, m in folds
+        ],
+        ignore_index=True,
+    )
+    cp.index = pd.Index(idx, name="cell")
+    cp = cp.reindex(obs)
+    assigned = pd.Index(states).get_indexer(cp["predicted_state"].to_numpy().astype(str))
+    evidence = novelty.holdout_evidence(
+        X,
+        state_codes,
+        groups,
+        folds,
+        states,
+        index_template=backend,
+        min_cells=config.min_group_cells,
+        assigned_codes=assigned,
+    )
+    evidence.index = pd.Index(idx, name="cell")
+    return evidence.reindex(obs)
+
+
 def _run_fold_anndata(
     backend: AnnDataBackend, adata, state_key, y, groups, test, states, fold_name, abstain_below
 ):
@@ -513,10 +570,12 @@ def run_validation(
     n_splits: int = 5,
     adata: AnnData | None = None,
     state_key: str | None = None,
+    study_labels: np.ndarray | None = None,
 ) -> ValidationResult:
     """
     Run grouped or random-split validation with an array backend (``X`` required) or an
     AnnData backend (``adata`` and ``state_key`` required), and assemble the result.
+    ``study_labels`` (per cell) are needed for ``config.calibration_unit="study"``.
     """
     if method not in schema.VALIDATION_METHODS:
         raise ValueError(f"method must be one of {schema.VALIDATION_METHODS}, got {method!r}")
@@ -586,8 +645,21 @@ def run_validation(
         )
         evidence.index = pd.Index(idx.astype(str), name="cell")
         evidence = evidence.reindex(np.asarray(obs_names).astype(str))
+        units = np.full(len(states), "group", dtype=object)
+        if config.calibration_unit == "study" and method == "leave_one_group_out":
+            study_ev = _study_holdout_evidence(
+                backend, X, y, groups, study_labels, obs_names, states, state_codes, config
+            )
+            evidence, units = novelty.merge_holdout_evidence(
+                evidence,
+                study_ev,
+                states,
+                min_cells=config.min_group_cells,
+                min_groups=config.thresholds.min_groups,
+            )
         _, geometry = novelty.state_geometry(X, state_codes, len(states))
         calibration = novelty.holdout_distance_calibration(evidence, geometry, states)
+        calibration["calibration_unit"] = units
     result = summarize_holdout(
         cp,
         states=states,

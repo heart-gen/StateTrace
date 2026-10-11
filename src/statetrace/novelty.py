@@ -332,6 +332,38 @@ def holdout_evidence(
     return pd.concat(rows, ignore_index=True)[list(EVIDENCE_COLUMNS)]
 
 
+def merge_holdout_evidence(
+    group_evidence: pd.DataFrame,
+    study_evidence: pd.DataFrame,
+    states: np.ndarray | list[str],
+    *,
+    min_cells: int = 20,
+    min_groups: int = 3,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """
+    Per state, the study-holdout evidence when at least ``min_groups`` held-out groups carry
+    ``min_cells`` or more cells assigned to the state with a finite centroid distance, else the
+    group-holdout evidence (a state seen in one study only has no study-held-out centroid).
+
+    Returns the merged evidence, with a ``unit`` column (``"study"`` / ``"group"``), and the
+    unit per state. A cell's assigned state can differ between the two holdouts, so a cell
+    may appear once in each part or in neither.
+    """
+    states = np.asarray(states).astype(str)
+    e = study_evidence[np.isfinite(study_evidence["distance"].to_numpy(dtype=float))]
+    n = e.groupby([e["assigned_state"].astype(str), e["group"].astype(str)]).size()
+    n_groups = n[n >= min_cells].groupby(level=0).size()
+    units = np.array(
+        ["study" if int(n_groups.get(s_, 0)) >= min_groups else "group" for s_ in states],
+        dtype=object,
+    )
+    by_study = set(states[units == "study"])
+    a = study_evidence[study_evidence["assigned_state"].astype(str).isin(by_study)]
+    b = group_evidence[~group_evidence["assigned_state"].astype(str).isin(by_study)]
+    merged = pd.concat([a.assign(unit="study"), b.assign(unit="group")])
+    return merged, units
+
+
 def _q(x: np.ndarray, q: float) -> float:
     return float(np.quantile(x, q)) if x.size else np.nan
 

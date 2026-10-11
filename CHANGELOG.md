@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `score_query`.
 - `simulate_transport(spread_states=...)`: a change in spread with the mean kept (truth
   `spread`, column `spread_factor`).
+- `LODOConfig(calibration_unit="study")`: the novelty null of a leave-one-group-out run
+  (held-out distances, their quantiles, the population thresholds) is built with one study
+  held out at a time, each held-out donor's latent offset removed as for a query donor, so a
+  query from a new study is judged against between-study differences an offset does not
+  remove. States without enough study-held-out evidence keep the group null;
+  `distance_calibration["calibration_unit"]` and `route.reference["novelty_calibration_unit"]`
+  record the choice. Reproducibility still comes from the group holdout. Default `"group"`
+  (unchanged).
 
 ### Changed
 - `validate_transport` raises when a query group (donor) is also a reference group, unless

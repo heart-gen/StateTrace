@@ -351,6 +351,7 @@ class StateReference:
             n_splits=n_splits,
             adata=self.adata if self.uses_anndata_backend else None,
             state_key=self.state_key,
+            study_labels=self.studies_[self.study_codes_] if self.studies_ is not None else None,
         )
 
     def leave_one_group_out(
