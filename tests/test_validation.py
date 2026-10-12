@@ -3,7 +3,7 @@ import warnings
 import anndata as ad
 import numpy as np
 import pytest
-from conftest import REF_KW
+from conftest import REF_KW, blurred_reference
 from sklearn.linear_model import LogisticRegression
 
 from statetrace import (
@@ -240,3 +240,49 @@ def test_logo_scale():
         .leave_one_group_out(n_jobs=2)
     )
     assert res.overall["n_folds"] == 20 and res.cell_predictions.shape[0] == a.n_obs
+
+
+def test_expression_reproducibility_is_the_same_in_every_latent(tmp_path):
+    a = blurred_reference()
+    calls = {}
+    for key in ("X_latent", "X_blur"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = Reference(a.copy(), **{**REF_KW, "latent_key": key}).fit()
+        latent = ref.leave_one_group_out().state_metrics
+        res = ref.leave_one_group_out(reproducibility_space="expression")
+        sm = res.state_metrics
+        # the latent holdout keeps its metrics; its call moves to reproducibility_latent
+        assert sm[STATE_COLS[:-2]].equals(latent[STATE_COLS[:-2]])
+        assert sm["reproducibility_latent"].equals(latent["reproducibility"])
+        assert sm["reproducibility"].equals(sm["reproducibility_expression"])
+        calls[key] = sm
+    assert (calls["X_latent"]["reproducibility_latent"] == "stable").all()
+    assert calls["X_blur"].loc["S1", "reproducibility_latent"] == "fragile"
+    # the same reference cells get the same call whichever latent they sit in
+    for col in ("reproducibility", "median_group_recall_expression", "n_groups_scored_expression"):
+        assert calls["X_latent"][col].equals(calls["X_blur"][col])
+    assert (calls["X_blur"]["reproducibility"] == "stable").all()
+    assert "expression space" in res.summary()
+    back = ValidationResult.from_dir(res.to_dir(tmp_path / "val"))
+    assert back.config.reproducibility_space == "expression"
+    assert list(back.state_metrics["reproducibility_latent"]) == list(sm["reproducibility_latent"])
+
+
+def test_expression_reproducibility_needs_the_cell_space(small_ref, tmp_path):
+    from statetrace import ExpressionConfig, LODOConfig
+
+    with pytest.raises(ValueError, match="reproducibility_space"):
+        LODOConfig(reproducibility_space="pca")
+    for expression in (False, ExpressionConfig(cell_sample_per_state=0)):
+        ref = Reference(small_ref.copy(), expression=expression, **REF_KW).fit()
+        with pytest.raises(ValueError, match="cell-level"):
+            ref.leave_one_group_out(reproducibility_space="expression")
+    ref = Reference(small_ref.copy(), **REF_KW).fit()
+    ref.leave_one_group_out()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref.freeze(tmp_path / "ref.statetrace")
+    loaded = Reference.load(tmp_path / "ref.statetrace").fit()
+    with pytest.raises(ValueError, match="AnnData"):
+        loaded.leave_one_group_out(reproducibility_space="expression")

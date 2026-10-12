@@ -656,6 +656,32 @@ def project_cells(
     return Z @ comps.T
 
 
+def cell_coordinates(
+    space: ExpressionSpace,
+    X: Any,
+    var_names: np.ndarray | pd.Index,
+    *,
+    chunk_size: int = 20000,
+) -> np.ndarray:
+    """
+    Coordinates of every cell of ``X`` (cells x ``var_names``) in the frozen cell-level space,
+    projected ``chunk_size`` cells at a time. Every gene of the space must be present, as it
+    is for the reference the space was built from.
+    """
+    if not space.has_cell_space:
+        raise ValueError("the expression space carries no cell-level space")
+    col = pd.Index(np.asarray(var_names).astype(str)).get_indexer(space.genes)
+    if (col < 0).any():
+        raise ValueError(f"{int((col < 0).sum())} genes of the expression space are missing")
+    counts = space.params.get("input", "counts") == "counts"
+    n = X.shape[0]
+    out = np.empty((n, space.cell_components.shape[0]), dtype=np.float32)
+    for start in range(0, n, int(chunk_size)):
+        stop = min(start + int(chunk_size), n)
+        out[start:stop] = project_cells(space, X[start:stop][:, col], counts=counts)
+    return out
+
+
 # ---------------------------------------------------------------------------- query
 def _subset(space: ExpressionSpace, idx: np.ndarray) -> dict[str, Any]:
     full = len(idx) == space.n_genes and np.array_equal(idx, np.arange(space.n_genes))

@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 STATE_COLUMNS = (
     "ref_groups",
     "ref_reproducibility",
+    "ref_reproducibility_latent",
+    "ref_reproducibility_expression",
     "query_groups",
     "groups_observed",
     "groups_recovered",
@@ -254,7 +256,8 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     Rule-based status for one state, evaluated in order.
 
     1. ``absent``: too few supported query cells or no observing group.
-    2. ``insufficient``: the reference itself does not reproduce the state.
+    2. ``insufficient``: the reference itself does not reproduce the state (``ref_reproducibility``,
+       judged in the space ``LODOConfig.reproducibility_space`` chose).
     3. Displaced (high shift in the deciding coordinate system, or out-of-reference fraction
        above the maximum): if the cells that *do* lie within the reference distribution still
        recover the state in enough groups with low shift, an out-of-reference population sits
@@ -1033,13 +1036,24 @@ def validate_transport(
     )
     st["ref_groups"] = meta["n_groups"].fillna(0).astype(int) if meta is not None else 0
     if reference.validation_ is not None:
-        st["ref_reproducibility"] = (
-            reference.validation_.state_metrics["reproducibility"]
+        sm = reference.validation_.state_metrics
+        st["ref_reproducibility"] = sm["reproducibility"].reindex(states).fillna("insufficient")
+        st["ref_reproducibility_latent"] = (
+            sm.get("reproducibility_latent", sm["reproducibility"])
             .reindex(states)
             .fillna("insufficient")
         )
+        st["ref_reproducibility_expression"] = (
+            sm["reproducibility_expression"].reindex(states).fillna("insufficient")
+            if "reproducibility_expression" in sm
+            else None
+        )
+        reproducibility_space = reference.validation_.config.reproducibility_space
     else:
         st["ref_reproducibility"] = "unvalidated" if cfg.require_reference_validation else "stable"
+        st["ref_reproducibility_latent"] = st["ref_reproducibility"]
+        st["ref_reproducibility_expression"] = None
+        reproducibility_space = None
     if query_state_key is not None:
         true = cells["true_state"].to_numpy()
         pred = cells["state"].to_numpy()
@@ -1069,6 +1083,7 @@ def validate_transport(
             "state_key": reference.state_key,
             "latent": dict(reference.latent_provenance_),
             "validated": reference.validation_ is not None,
+            "reproducibility_space": reproducibility_space,
             "latent_available": Z is not None,
             "novelty_calibration": (
                 "holdout"

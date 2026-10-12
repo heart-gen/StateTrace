@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import REF_KW
+from conftest import REF_KW, blurred_reference
 
 from statetrace import (
     Predictions,
@@ -680,3 +680,30 @@ def test_study_calibration_falls_back_per_state(tmp_path):
         no_study = Reference(ref_adata.copy(), **REF_KW).fit()
         with pytest.raises(ValueError, match="study labels"):
             no_study.leave_one_group_out(calibration_unit="study")
+
+
+def test_transport_reports_both_reproducibility_calls():
+    a = blurred_reference(n_donors=12)
+    ref_donors = [f"D{i:02d}" for i in range(8)]
+    in_ref = a.obs["donor_id"].isin(ref_donors).to_numpy()
+    ref_adata, qry = a[in_ref].copy(), a[~in_ref].copy()
+    for d in (ref_adata, qry):
+        d.obs["donor_id"] = d.obs["donor_id"].cat.remove_unused_categories()
+    status = {}
+    for space in ("latent", "expression"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = Reference(ref_adata.copy(), **{**REF_KW, "latent_key": "X_blur"}).fit()
+            ref.leave_one_group_out(reproducibility_space=space)
+            route = validate_transport(ref, qry, group_key="donor_id", latent_key="X_blur")
+        st = route.states
+        assert route.reference["reproducibility_space"] == space
+        assert st.loc["S1", "ref_reproducibility_latent"] in ("moderate", "fragile")
+        if space == "latent":
+            assert st["ref_reproducibility"].equals(st["ref_reproducibility_latent"])
+            assert st["ref_reproducibility_expression"].isna().all()
+        else:
+            assert st["ref_reproducibility"].equals(st["ref_reproducibility_expression"])
+            assert (st["ref_reproducibility"] == "stable").all()
+        status[space] = st["status"]
+    assert status["latent"]["S1"] != "supported"

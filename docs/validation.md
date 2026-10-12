@@ -38,6 +38,22 @@ A rule-based, descriptive category evaluated in this order with the defaults of
 These are not claims of biological equivalence. Keep the raw columns; the category is a
 reading aid. The thresholds are configurable and should be predeclared in a benchmark.
 
+### Which space decides it
+
+By default the holdout runs in the reference's latent, so the category describes the state in
+that latent: the same reference cells can be `stable` in one mapper's latent and `fragile` in
+another's. `LODOConfig(reproducibility_space="expression")` repeats the holdout with the kNN on
+every reference cell projected into the frozen cell-level expression space (log-normalised
+selected genes, standardised, principal components fitted on a seeded per-state sample of
+reference cells; see {func}`~statetrace.expression.cell_coordinates`). That space is built
+from counts alone, so every mapper's reference gets the same call, which then decides
+`reproducibility`. The latent call is kept as `reproducibility_latent` beside the latent metrics,
+and the expression holdout adds `reproducibility_expression`, `n_groups_scored_expression`,
+`median_group_recall_expression`, `min_group_recall_expression` and
+`group_recovery_rate_expression`. It needs the reference AnnData and the cell-level space
+(`ExpressionConfig.cell_sample_per_state > 0`). The expression space is fitted with every
+group present: the same fixed-space optimism as a fixed latent.
+
 ## External backends
 
 An {class}`~statetrace.AnnDataBackend` (for example {class}`~statetrace.CallableBackend` around

@@ -87,6 +87,18 @@ class LODOConfig:
         in the study holdout (for instance a state seen in one study only) keeps the
         group-holdout null; ``distance_calibration["calibration_unit"]`` records which one each
         state uses. Reproducibility always comes from the group holdout.
+    reproducibility_space
+        Coordinates the ``reproducibility`` category is judged in. ``"latent"`` (default) runs
+        the grouped holdout in the reference's latent, so the call depends on the mapper whose
+        latent it is. ``"expression"`` runs the same holdout with the built-in kNN on every
+        reference cell projected into the frozen cell-level expression space
+        (:func:`statetrace.expression.cell_coordinates`), built from counts alone, so every
+        mapper's reference gets the same call; it needs the reference's AnnData and an
+        expression space with its cell-level part. The latent holdout still runs and keeps
+        its metrics (``median_group_recall`` ...), its call moves to
+        ``reproducibility_latent``, and the expression holdout adds
+        ``reproducibility_expression`` with ``*_expression`` metrics. The expression space is
+        fitted with every group present, the same fixed-space optimism as a fixed latent.
     """
 
     min_group_cells: int = 20
@@ -97,12 +109,18 @@ class LODOConfig:
     refit_latent: bool = False
     random_state: int = 0
     calibration_unit: str = "group"
+    reproducibility_space: str = "latent"
 
     def __post_init__(self) -> None:
         if self.calibration_unit not in schema.CALIBRATION_UNITS:
             raise ValueError(
                 f"calibration_unit must be one of {schema.CALIBRATION_UNITS}, "
                 f"got {self.calibration_unit!r}"
+            )
+        if self.reproducibility_space not in schema.REPRODUCIBILITY_SPACES:
+            raise ValueError(
+                f"reproducibility_space must be one of {schema.REPRODUCIBILITY_SPACES}, "
+                f"got {self.reproducibility_space!r}"
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -178,6 +196,7 @@ class ValidationResult:
             f"macro F1 {o['macro_f1']:.3f} | abstention {o['abstention_rate']:.3f}",
             f"  median group balanced accuracy {o['median_group_balanced_accuracy']:.3f}",
             "  states: " + ", ".join(f"{k}={int(v)}" for k, v in counts.items()),
+            f"  reproducibility judged in the {self.config.reproducibility_space} space",
             f"  backend {self.backend.get('name')} {self.backend.get('params')}",
         ]
         if not self.latent.get("refit_latent", False) and self.latent.get("source") not in (
@@ -432,6 +451,62 @@ def _study_holdout_evidence(
     return evidence.reindex(obs)
 
 
+EXPRESSION_REPRODUCIBILITY_COLUMNS = (
+    "n_groups_scored",
+    "median_group_recall",
+    "min_group_recall",
+    "group_recovery_rate",
+    "reproducibility",
+)
+
+
+def _run_folds_array(backend, X, y, groups, folds, states, config) -> list[pd.DataFrame]:
+    if config.n_jobs and config.n_jobs != 1:
+        from joblib import Parallel, delayed
+
+        return Parallel(n_jobs=config.n_jobs, prefer="threads")(
+            delayed(_run_fold_array)(backend, X, y, groups, m, states, name, config.abstain_below)
+            for name, m in folds
+        )
+    return [
+        _run_fold_array(backend, X, y, groups, m, states, name, config.abstain_below)
+        for name, m in folds
+    ]
+
+
+def _expression_reproducibility(
+    state_metrics: pd.DataFrame, coords, backend, y, groups, folds, states, config
+) -> pd.DataFrame:
+    """
+    Repeat the holdout with the kNN on the reference cells' expression coordinates and let
+    that call decide ``reproducibility``; the latent call moves to ``reproducibility_latent``.
+    """
+    from .backends.knn import KNNBackend
+
+    if coords is None:
+        raise ValueError(
+            "reproducibility_space='expression' needs the reference cells' coordinates in the "
+            "frozen cell-level expression space"
+        )
+    coords = np.asarray(coords, dtype=np.float32)
+    if coords.shape[0] != len(y):
+        raise ValueError(
+            f"expression coordinates have {coords.shape[0]} rows for {len(y)} reference cells"
+        )
+    knn = backend if isinstance(backend, KNNBackend) else KNNBackend()
+    cp = pd.concat(
+        _run_folds_array(knn, coords, y, groups, folds, states, config), ignore_index=True
+    )
+    gm = metrics.group_state_table(cp, min_group_cells=config.min_group_cells)
+    expr = metrics.state_table(gm, cp, states=states, thresholds=config.thresholds)
+    out = state_metrics.copy()
+    out["reproducibility_latent"] = out["reproducibility"]
+    for col in EXPRESSION_REPRODUCIBILITY_COLUMNS:
+        out[f"{col}_expression"] = expr[col].reindex(out.index)
+    out["reproducibility"] = out["reproducibility_expression"]
+    return out
+
+
 def _run_fold_anndata(
     backend: AnnDataBackend, adata, state_key, y, groups, test, states, fold_name, abstain_below
 ):
@@ -571,11 +646,14 @@ def run_validation(
     adata: AnnData | None = None,
     state_key: str | None = None,
     study_labels: np.ndarray | None = None,
+    expression_coords: np.ndarray | None = None,
 ) -> ValidationResult:
     """
     Run grouped or random-split validation with an array backend (``X`` required) or an
     AnnData backend (``adata`` and ``state_key`` required), and assemble the result.
-    ``study_labels`` (per cell) are needed for ``config.calibration_unit="study"``.
+    ``study_labels`` (per cell) are needed for ``config.calibration_unit="study"``, and the
+    reference cells' coordinates in the frozen cell-level expression space
+    (``expression_coords``) for ``config.reproducibility_space="expression"``.
     """
     if method not in schema.VALIDATION_METHODS:
         raise ValueError(f"method must be one of {schema.VALIDATION_METHODS}, got {method!r}")
@@ -601,20 +679,7 @@ def run_validation(
         if X is None:
             raise ValueError("an array backend needs the latent matrix X")
         X = np.asarray(X, dtype=np.float32)
-        if config.n_jobs and config.n_jobs != 1:
-            from joblib import Parallel, delayed
-
-            parts = Parallel(n_jobs=config.n_jobs, prefer="threads")(
-                delayed(_run_fold_array)(
-                    backend, X, y, groups, m, states, name, config.abstain_below
-                )
-                for name, m in folds
-            )
-        else:
-            parts = [
-                _run_fold_array(backend, X, y, groups, m, states, name, config.abstain_below)
-                for name, m in folds
-            ]
+        parts = _run_folds_array(backend, X, y, groups, folds, states, config)
     else:
         if adata is None or state_key is None:
             raise ValueError("an AnnData backend needs adata and state_key")
@@ -673,6 +738,17 @@ def run_validation(
         metadata_state_table=metadata_state_table,
         latent={**latent_provenance, "refit_latent": False},
     )
+    if config.reproducibility_space == "expression":
+        result.state_metrics = _expression_reproducibility(
+            result.state_metrics,
+            expression_coords,
+            backend if is_array else None,
+            y,
+            groups,
+            folds,
+            states,
+            config,
+        )
     result.distance_calibration = calibration
     result.holdout_evidence = evidence
     return result

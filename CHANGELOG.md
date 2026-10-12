@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `distance_calibration["calibration_unit"]` and `route.reference["novelty_calibration_unit"]`
   record the choice. Reproducibility still comes from the group holdout. Default `"group"`
   (unchanged).
+- `LODOConfig(reproducibility_space="expression")`: the `reproducibility` category is judged
+  by the grouped holdout repeated with the kNN on every reference cell in the frozen
+  cell-level expression space (`expression.cell_coordinates`), built from counts alone, so
+  the same reference cells get the same call whichever mapper's latent they sit in. The
+  latent call is kept as `reproducibility_latent`; the expression holdout adds
+  `reproducibility_expression` and `*_expression` metrics. Transport reports
+  `ref_reproducibility_latent` and `ref_reproducibility_expression` beside the deciding
+  `ref_reproducibility`, and `route.reference["reproducibility_space"]`. Default `"latent"`
+  (unchanged).
 
 ### Changed
 - `validate_transport` raises when a query group (donor) is also a reference group, unless
