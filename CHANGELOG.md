@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ref_reproducibility_latent` and `ref_reproducibility_expression` beside the deciding
   `ref_reproducibility`, and `route.reference["reproducibility_space"]`. Default `"latent"`
   (unchanged).
+- Elongated states and a withheld state between two states in the simulator:
+  `simulate_reference` / `simulate_transport(state_anisotropy=, anisotropic_dims=)` stretch
+  each state's noise along its own random directions (drawn from a separate generator, so
+  every existing seed is unchanged), and `simulate_transport(novel_between={novel: (a, b,
+  t)})` places a withheld state a fraction `t` of the way from `a` to `b`. With elongated
+  absorbing states the centroid score loses an absorbed population that the kNN distance
+  still finds (`tests/test_transport.py`: AUROC 0.66-0.88 centroid against 0.89-0.98 kNN over
+  three seeds at `t=0.35`, stretch 3); the round-state grid behind the predeclared
+  `ood_score` never showed this.
 
 ### Changed
 - `validate_transport` raises when a query group (donor) is also a reference group, unless

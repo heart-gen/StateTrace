@@ -707,3 +707,35 @@ def test_transport_reports_both_reproducibility_calls():
             assert (st["ref_reproducibility"] == "stable").all()
         status[space] = st["status"]
     assert status["latent"]["S1"] != "supported"
+
+
+def test_knn_score_finds_a_withheld_state_between_elongated_states():
+    from sklearn.metrics import roc_auc_score
+
+    ref_adata, qry, _ = simulate_transport(
+        n_ref_groups=8,
+        n_query_groups=6,
+        n_states=6,
+        n_cells_per_group=300,
+        n_latent=10,
+        cohort_effect=0.3,
+        novel_states=["S5"],
+        novel_between={"S5": ("S2", "S3", 0.35)},
+        state_anisotropy=3.0,
+        anisotropic_dims=2,
+        seed=0,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), **REF_KW).fit()
+        ref.leave_one_group_out()
+        route = validate_transport(ref, qry, group_key="donor_id", query_state_key="cell_state")
+    cells = route.cells.reindex(qry.obs_names)
+    novel = qry.obs["cell_state"].astype(str).to_numpy() == "S5"
+    auc = {
+        col: roc_auc_score(novel, cells[col].fillna(cells[col].max()))
+        for col in ("novelty", "knn_novelty", "joint_novelty")
+    }
+    # the elongated absorbing states hide the population from the centroid distance
+    assert auc["knn_novelty"] > auc["novelty"] + 0.15
+    assert auc["joint_novelty"] > auc["novelty"]
