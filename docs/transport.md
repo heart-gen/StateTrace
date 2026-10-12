@@ -146,11 +146,47 @@ least `min_confidence` when a confidence exists, out-of-reference fraction at mo
 | `insufficient` (reference) | reference reproducibility `fragile` or `insufficient` |
 | `shifted` | `shift_level` high (at least 4 reference sd in the deciding coordinate system) or `ood_fraction` above the state's `ood_threshold`, unless the in-reference cells still recover the state in enough groups with low shift, in which case an out-of-reference population sits beside an intact state -> `supported_with_caution` with `novel_population` |
 | `insufficient` (query) | fewer than `min_groups_recovered` (3) donors recover it |
-| `supported_with_caution` | reference reproducibility `moderate` or `unvalidated`, recovery rate below 0.8, uncertain fraction above 0.2, moderate shift, or no confidence evidence at all (`confidence_source` `none`) |
+| `supported_with_caution` | reference reproducibility `moderate` or `unvalidated`, recovery rate below 0.8, uncertain fraction above 0.2 (or, with `caution_calibration="holdout"`, recovery or uncertainty measurably worse than in held-out reference donors; below), moderate shift, or no confidence evidence at all (`confidence_source` `none`) |
 | `supported` | otherwise |
 
 The rules are descriptive defaults meant to be predeclared in a benchmark and reported with
-the raw columns, not tuned to make a state pass.
+the raw columns, not tuned to make a state pass. `caution_reasons` lists the triggers a
+cautioned state met (`novel_population`, `reproducibility`, `recovery`, `uncertainty`,
+`shift`, `no_confidence`).
+
+### Caution against held-out reference donors
+
+`supported_with_caution` says the state is the reference's population and may enter
+downstream analyses, but its labels are less trustworthy in some donors, so a result in that
+state could partly reflect labelling. The fixed cut-offs (recovery below 0.8, uncertain
+fraction above 0.2) read that off noisy donor counts and ignore how the reference itself
+behaves: with 11 donors, 11/11 recovering has a 95% interval of 0.74-1.00, and a state whose
+own reference donors are 25% uncertain is cautioned in every query.
+
+`TransportConfig(caution_calibration="holdout")` asks instead whether the query's donors do
+worse than a new reference donor does. Every held-out donor of grouped validation and every
+query donor is measured the same way, from StateTrace's own evidence in the mapper's latent
+(local support in place of confidence, the active out-of-reference rule, the per-state
+support thresholds), never from the mapper's confidence, which only the query has
+(`novelty.group_evidence_table`). A state is cautioned for
+
+- **recovery** when the query recovers it in a lower share of observing donors than the
+  held-out reference (one-sided Fisher exact test, `p < caution_alpha`, default 0.05) by more
+  than `caution_margin` (0.1): `cmp_recovery_rate`, `ref_recovery_rate`, `recovery_p`;
+- **uncertainty** when the per-donor uncertain fractions are higher (one-sided Mann-Whitney U,
+  `p < caution_alpha`) with a median more than `caution_margin` above:
+  `cmp_uncertain_fraction`, `ref_uncertain_fraction`, `uncertain_p`.
+
+A state seen in fewer than `min_groups_recovered` held-out donors keeps the fixed cut-offs
+(`caution_basis`). Sample size enters the test, not the label: a small cohort that behaves
+like the reference is `supported`, and caution names a cohort-specific loss of label
+reliability. The null should carry the same kinds of difference the query does: a query
+from a new study is judged against study-held-out donors with
+`LODOConfig(calibration_unit="study")`. On the simulator (a two-study reference, a query
+from a third cohort with its own offset; 60 stable states per row), stable states whose
+clusters overlap (separation 1) were cautioned for recovery or uncertainty in 43% of cases
+under the fixed cut-offs, 13% against the donor-held-out null and 3% against the
+study-held-out null; at separation 1.5, 0%, 2% and 2%.
 
 ## Backend robustness
 

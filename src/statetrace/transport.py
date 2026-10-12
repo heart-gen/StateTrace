@@ -84,6 +84,15 @@ STATE_COLUMNS = (
     "latent_shift_raw",
     "expression_shift_raw",
     "novel_population",
+    "caution_basis",
+    "ref_groups_observed",
+    "cmp_recovery_rate",
+    "ref_recovery_rate",
+    "recovery_p",
+    "cmp_uncertain_fraction",
+    "ref_uncertain_fraction",
+    "uncertain_p",
+    "caution_reasons",
     "query_recall",
     "status",
 )
@@ -145,7 +154,21 @@ class TransportConfig:
     min_groups_recovered
         Fewer recovering groups -> ``insufficient``.
     caution_recovery_rate, caution_uncertain_fraction
-        Below / above these -> ``supported_with_caution``.
+        Below / above these -> ``supported_with_caution`` (``caution_calibration="fixed"``,
+        and for any state the held-out comparison cannot judge).
+    caution_calibration, caution_alpha, caution_margin
+        ``"fixed"`` (default) applies the two cut-offs above. ``"holdout"`` asks instead
+        whether the query's groups do worse than held-out reference groups do. Both are
+        measured from StateTrace's own cell evidence in the mapper's latent (local support
+        standing in for confidence; the same out-of-reference rule, support thresholds and
+        recovery rule), never from the mapper's confidence, which exists only for the query
+        (``cmp_*`` and ``ref_*`` state columns). A state is cautioned for recovery when the query
+        recovers it in a lower share of observing groups (one-sided Fisher exact
+        ``p < caution_alpha``) by more than ``caution_margin``, and for uncertainty when the
+        per-group uncertain fractions are higher (one-sided Mann-Whitney ``p < caution_alpha``)
+        with a median more than ``caution_margin`` above. States with fewer than
+        ``min_groups_recovered`` observing held-out groups, or a route without held-out
+        evidence or a query latent, keep the fixed cut-offs (``caution_basis``).
     max_ood_fraction, shift_moderate, shift_high
         Out-of-reference fraction above ``max_ood_fraction`` or a shift at or above
         ``shift_high`` -> ``shifted``; between ``shift_moderate`` and ``shift_high`` -> caution.
@@ -208,6 +231,9 @@ class TransportConfig:
     min_groups_recovered: int = 3
     caution_recovery_rate: float = 0.8
     caution_uncertain_fraction: float = 0.2
+    caution_calibration: str = "fixed"
+    caution_alpha: float = 0.05
+    caution_margin: float = 0.1
     max_ood_fraction: float = 0.3
     shift_moderate: float = 2.0
     shift_high: float = 4.0
@@ -228,6 +254,12 @@ class TransportConfig:
             raise ValueError(f"ood_rule must be one of {novelty.OOD_RULES}")
         if self.ood_score not in novelty.OOD_SCORES:
             raise ValueError(f"ood_score must be one of {novelty.OOD_SCORES}")
+        if self.caution_calibration not in ("holdout", "fixed"):
+            raise ValueError("caution_calibration must be 'holdout' or 'fixed'")
+        if not 0 < self.caution_alpha < 1:
+            raise ValueError("caution_alpha must lie in (0, 1)")
+        if not 0 <= self.caution_margin < 1:
+            raise ValueError("caution_margin must lie in [0, 1)")
         if self.support_calibration not in ("holdout", "fixed"):
             raise ValueError("support_calibration must be 'holdout' or 'fixed'")
         if float(self.support_quantile) not in (0.05, 0.10):
@@ -264,8 +296,9 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
        next to an otherwise intact state -> ``supported_with_caution`` (``novel_population``);
        otherwise ``shifted``.
     4. ``insufficient``: too few query groups recover the state.
-    5. ``supported_with_caution`` on any caution trigger (including a tool that gives neither
-       confidence nor a latent to compute support from), else ``supported``.
+    5. ``supported_with_caution`` on any caution trigger (:func:`caution_reasons`, including
+       a tool that gives neither confidence nor a latent to compute support from), else
+       ``supported``.
     """
     n_supported = row.get("n_cells_supported", row["n_cells"])
     if n_supported < cfg.min_cells_total or row["groups_observed"] == 0:
@@ -273,29 +306,53 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     rep = row["ref_reproducibility"]
     if rep in ("fragile", "insufficient"):
         return "insufficient"
-    ood_thr = row.get("ood_threshold", cfg.max_ood_fraction)
-    ood_thr = cfg.max_ood_fraction if ood_thr is None or not np.isfinite(ood_thr) else ood_thr
-    displaced = row["shift_level"] == "high" or (
-        np.isfinite(row["ood_fraction"]) and row["ood_fraction"] > ood_thr
-    )
-    if displaced:
+    if _displaced(row, cfg):
         coherent = row["groups_recovered_in_reference"] >= cfg.min_groups_recovered and row[
             "shift_in_reference_level"
         ] in ("low", "moderate")
         return "supported_with_caution" if coherent else "shifted"
     if row["groups_recovered"] < cfg.min_groups_recovered:
         return "insufficient"
-    caution = (
-        rep in ("moderate", "unvalidated")
-        or row["recovery_rate"] < cfg.caution_recovery_rate
-        or (
+    return "supported_with_caution" if caution_reasons(row, cfg) else "supported"
+
+
+def _displaced(row: pd.Series | dict, cfg: TransportConfig) -> bool:
+    """High shift, or an out-of-reference fraction above the state's threshold."""
+    ood_thr = row.get("ood_threshold", cfg.max_ood_fraction)
+    ood_thr = cfg.max_ood_fraction if ood_thr is None or not np.isfinite(ood_thr) else ood_thr
+    return row["shift_level"] == "high" or bool(
+        np.isfinite(row["ood_fraction"]) and row["ood_fraction"] > ood_thr
+    )
+
+
+def caution_reasons(row: pd.Series | dict, cfg: TransportConfig) -> list[str]:
+    """
+    The caution triggers a state's evidence meets, in a fixed order: ``reproducibility``
+    (the reference reproduces it only moderately, or is unvalidated), ``recovery`` and
+    ``uncertainty`` (against the fixed cut-offs, or against held-out reference groups when
+    ``caution_basis`` is ``"holdout"``), ``shift`` (moderate) and ``no_confidence``.
+    """
+    reasons = []
+    if row["ref_reproducibility"] in ("moderate", "unvalidated"):
+        reasons.append("reproducibility")
+    if row.get("caution_basis", "fixed") == "holdout":
+        low_recovery = bool(row["recovery_worse"])
+        uncertain = bool(row["uncertain_worse"])
+    else:
+        low_recovery = row["recovery_rate"] < cfg.caution_recovery_rate
+        uncertain = bool(
             np.isfinite(row["uncertain_fraction"])
             and row["uncertain_fraction"] > cfg.caution_uncertain_fraction
         )
-        or row["shift_level"] == "moderate"
-        or row.get("confidence_source", "backend") == "none"
-    )
-    return "supported_with_caution" if caution else "supported"
+    if low_recovery:
+        reasons.append("recovery")
+    if uncertain:
+        reasons.append("uncertainty")
+    if row["shift_level"] == "moderate":
+        reasons.append("shift")
+    if row.get("confidence_source", "backend") == "none":
+        reasons.append("no_confidence")
+    return reasons
 
 
 @dataclass
@@ -683,6 +740,7 @@ def validate_transport(
     cohort_offset = np.zeros(reference.latent_.shape[1], dtype=np.float32)
     support = preds.support.to_numpy(dtype=float) if preds.support is not None else None
     support_source = "backend" if support is not None else "none"
+    own_support: np.ndarray | None = None
     calibration = reference.distance_calibration_
     support_thr = novelty.support_thresholds(
         calibration if cfg.support_calibration == "holdout" else None,
@@ -1054,6 +1112,43 @@ def validate_transport(
         st["ref_reproducibility_latent"] = st["ref_reproducibility"]
         st["ref_reproducibility_expression"] = None
         reproducibility_space = None
+    # caution: fixed cut-offs, or the query's groups against held-out reference groups
+    holdout_groups = query_cmp = None
+    if (
+        cfg.caution_calibration == "holdout"
+        and Z is not None
+        and ood_applied is not None
+        and reference.validation_ is not None
+    ):
+        cmp_kw = {
+            "support_thresholds": support_thr,
+            "uncertain_below": cfg.uncertain_below,
+            "min_confidence": cfg.min_confidence,
+            "min_cells": cfg.min_cells_per_group,
+            "max_ood_fraction": cfg.max_ood_fraction,
+        }
+        holdout_groups = novelty.holdout_group_table(
+            reference.validation_.holdout_evidence,
+            calibration,
+            states,
+            score=ood_applied["score"],
+            rule=ood_applied["rule"],
+            z=cfg.ood_z,
+            quantile=cfg.ood_quantile,
+            **cmp_kw,
+        )
+        query_cmp = novelty.group_evidence_table(
+            cells["group"].to_numpy(), codes, own_support, ood, states, **cmp_kw
+        )
+    ct = novelty.caution_against_holdout(
+        query_cmp,
+        holdout_groups,
+        states,
+        alpha=cfg.caution_alpha,
+        margin=cfg.caution_margin,
+        min_groups=cfg.min_groups_recovered,
+    )
+    st = st.join(ct)
     if query_state_key is not None:
         true = cells["true_state"].to_numpy()
         pred = cells["state"].to_numpy()
@@ -1066,6 +1161,12 @@ def validate_transport(
     else:
         st["query_recall"] = np.nan
     st["status"] = [transport_status(row, cfg) for _, row in st.iterrows()]
+    st["caution_reasons"] = [
+        ";".join((["novel_population"] if _displaced(row, cfg) else []) + caution_reasons(row, cfg))
+        if status == "supported_with_caution"
+        else ""
+        for (_, row), status in zip(st.iterrows(), st["status"], strict=True)
+    ]
     st.index.name = "state"
     st = st[list(STATE_COLUMNS)]
     cells = cells.drop(columns="_supported_label")
@@ -1114,6 +1215,8 @@ def validate_transport(
                 and "support_q05_holdout" in calibration
                 else "fixed"
             ),
+            "caution_calibration": "holdout" if holdout_groups is not None else "fixed",
+            "caution_states_holdout": int((st["caution_basis"] == "holdout").sum()),
             "population_calibration": (
                 "holdout"
                 if cfg.population_calibration == "holdout"

@@ -47,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still finds (`tests/test_transport.py`: AUROC 0.66-0.88 centroid against 0.89-0.98 kNN over
   three seeds at `t=0.35`, stretch 3); the round-state grid behind the predeclared
   `ood_score` never showed this.
+- `TransportConfig(caution_calibration="holdout")`: the recovery and uncertainty caution
+  triggers compare the query's donors with held-out reference donors, both measured from
+  StateTrace's own evidence in the mapper's latent (`novelty.group_evidence_table`), instead
+  of fixed cut-offs (recovery below 0.8, uncertain fraction above 0.2): caution when the query
+  is worse with one-sided `p < caution_alpha` (Fisher exact for recovery, Mann-Whitney for
+  per-donor uncertain fractions) and by more than `caution_margin`. States seen in too few
+  held-out donors keep the cut-offs (`caution_basis`). New state columns `caution_basis`,
+  `ref_groups_observed`, `cmp_recovery_rate`, `ref_recovery_rate`, `recovery_p`,
+  `cmp_uncertain_fraction`, `ref_uncertain_fraction`, `uncertain_p` and, in every mode,
+  `caution_reasons` (also in the report); `route.reference["caution_calibration"]`. Default
+  `"fixed"` (unchanged).
 
 ### Changed
 - `validate_transport` raises when a query group (donor) is also a reference group, unless

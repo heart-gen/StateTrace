@@ -604,21 +604,8 @@ def population_thresholds(
     if evidence is None or calibration is None or len(evidence) == 0:
         return out
     e = evidence
-    by = "assigned_state" if "assigned_state" in e else "true_state"
-    codes = pd.Index(states).get_indexer(e[by].astype(str))
-    mask, _ = out_of_reference_mask(
-        e["distance"].to_numpy(dtype=float),
-        reference_distance_from_calibration(
-            e["distance"].to_numpy(dtype=float), codes, calibration, states
-        ),
-        codes,
-        rule=rule,
-        z=z,
-        quantile=quantile,
-        calibration=calibration,
-        states=states,
-        score=score,
-        knn_distance=e["knn_distance"].to_numpy(dtype=float),
+    codes, mask = evidence_ood_mask(
+        e, calibration, states, score=score, rule=rule, z=z, quantile=quantile
     )
     frac = (
         pd.DataFrame({"group": e["group"].astype(str), "code": codes, "flag": mask})
@@ -631,6 +618,207 @@ def population_thresholds(
         f = frac.loc[frac["code"] == k, "frac"].to_numpy(dtype=float)
         if f.size >= min_groups:
             out[k] = float(np.quantile(f, population_quantile))
+    return out
+
+
+def evidence_ood_mask(
+    evidence: pd.DataFrame,
+    calibration: pd.DataFrame,
+    states: np.ndarray | list[str],
+    *,
+    score: str,
+    rule: str,
+    z: float,
+    quantile: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Assigned-state codes of held-out reference cells and the cells the active rule flags."""
+    states = np.asarray(states).astype(str)
+    by = "assigned_state" if "assigned_state" in evidence else "true_state"
+    codes = pd.Index(states).get_indexer(evidence[by].astype(str))
+    dist = evidence["distance"].to_numpy(dtype=float)
+    mask, _ = out_of_reference_mask(
+        dist,
+        reference_distance_from_calibration(dist, codes, calibration, states),
+        codes,
+        rule=rule,
+        z=z,
+        quantile=quantile,
+        calibration=calibration,
+        states=states,
+        score=score,
+        knn_distance=evidence["knn_distance"].to_numpy(dtype=float),
+    )
+    return codes, mask
+
+
+def group_evidence_table(
+    groups: np.ndarray,
+    assigned_codes: np.ndarray,
+    support: np.ndarray,
+    ood: np.ndarray,
+    states: np.ndarray | list[str],
+    *,
+    support_thresholds: np.ndarray,
+    uncertain_below: float,
+    min_confidence: float,
+    min_cells: int,
+    max_ood_fraction: float,
+) -> pd.DataFrame:
+    """
+    Per group (donor) x assigned state, from StateTrace's own cell evidence only (local
+    support standing in for confidence, and the out-of-reference flag): whether the group
+    *observes* the state (at least ``min_cells`` cells at or above the state's support
+    threshold), whether it *recovers* it (observed, median support at least
+    ``min_confidence``, out-of-reference fraction at most ``max_ood_fraction``) and the
+    fraction of its cells that are uncertain (not out of reference, support below the
+    state's threshold or below ``uncertain_below``). The same function measures held-out
+    reference groups and query groups, so the two are comparable whichever mapper made the
+    query labels. Cells with no assigned state (code ``-1``) are dropped.
+    """
+    states = np.asarray(states).astype(str)
+    codes = np.asarray(assigned_codes)
+    keep = codes >= 0
+    codes = codes[keep]
+    sup = np.nan_to_num(np.asarray(support, dtype=float)[keep], nan=1.0)
+    ood = np.asarray(ood, dtype=bool)[keep]
+    thr = np.nan_to_num(np.asarray(support_thresholds, dtype=float)[codes], nan=-1.0)
+    low_support = sup < thr
+    t = (
+        pd.DataFrame(
+            {
+                "group": np.asarray(groups).astype(str)[keep],
+                "state": states[codes],
+                "supported_label": ~low_support,
+                "support": sup,
+                "ood": ood,
+                "uncertain": ~ood & (low_support | (sup < uncertain_below)),
+            }
+        )
+        .groupby(["group", "state"], sort=True)
+        .agg(
+            n_cells=("ood", "size"),
+            n_supported=("supported_label", "sum"),
+            median_support=("support", "median"),
+            ood_fraction=("ood", "mean"),
+            uncertain_fraction=("uncertain", "mean"),
+        )
+        .reset_index()
+    )
+    t["observed"] = t["n_supported"] >= min_cells
+    t["recovered"] = (
+        t["observed"]
+        & (t["median_support"] >= min_confidence)
+        & (t["ood_fraction"] <= max_ood_fraction)
+    )
+    return t
+
+
+def holdout_group_table(
+    evidence: pd.DataFrame | None,
+    calibration: pd.DataFrame | None,
+    states: np.ndarray | list[str],
+    *,
+    score: str,
+    rule: str,
+    z: float,
+    quantile: float,
+    **kwargs: Any,
+) -> pd.DataFrame | None:
+    """
+    :func:`group_evidence_table` for the held-out reference groups of grouped validation,
+    each cell judged against the training groups only and flagged by the active
+    out-of-reference rule. ``None`` without evidence or calibration.
+    """
+    if evidence is None or calibration is None or len(evidence) == 0:
+        return None
+    codes, ood = evidence_ood_mask(
+        evidence, calibration, states, score=score, rule=rule, z=z, quantile=quantile
+    )
+    return group_evidence_table(
+        evidence["group"].to_numpy(),
+        codes,
+        evidence["support"].to_numpy(dtype=float),
+        ood,
+        states,
+        **kwargs,
+    )
+
+
+def caution_against_holdout(
+    query_groups: pd.DataFrame | None,
+    holdout_groups: pd.DataFrame | None,
+    states: np.ndarray | list[str],
+    *,
+    alpha: float,
+    margin: float,
+    min_groups: int,
+) -> pd.DataFrame:
+    """
+    Per state, whether the query's groups (donors) do measurably and materially worse than
+    held-out reference groups, both measured by :func:`group_evidence_table`.
+
+    - recovery: among groups observing the state, the query recovers it in a lower share of
+      groups (one-sided Fisher exact test, ``p < alpha``), lower by more than ``margin``;
+    - uncertainty: the per-group uncertain fractions of the observing query groups exceed
+      the reference's (one-sided Mann-Whitney U, ``p < alpha``), with a median more than
+      ``margin`` above.
+
+    A state is judged this way (``caution_basis = "holdout"``) when at least ``min_groups``
+    held-out reference groups observe it; otherwise ``"fixed"`` and the caller applies the
+    fixed cut-offs. Both sides count groups, never cells, so the evidence grows with the
+    number of donors, not with cell depth.
+    """
+    from scipy.stats import fisher_exact, mannwhitneyu
+
+    states = np.asarray(states).astype(str)
+    out = pd.DataFrame(
+        {
+            "caution_basis": "fixed",
+            "ref_groups_observed": 0,
+            "cmp_recovery_rate": np.nan,
+            "ref_recovery_rate": np.nan,
+            "recovery_p": np.nan,
+            "recovery_worse": False,
+            "cmp_uncertain_fraction": np.nan,
+            "ref_uncertain_fraction": np.nan,
+            "uncertain_p": np.nan,
+            "uncertain_worse": False,
+        },
+        index=pd.Index(states, name="state"),
+    )
+    if query_groups is None or holdout_groups is None:
+        return out
+    q_obs = query_groups[query_groups["observed"]]
+    r_obs = holdout_groups[holdout_groups["observed"]]
+    for s in states:
+        qs = q_obs[q_obs["state"] == s]
+        rs = r_obs[r_obs["state"] == s]
+        out.loc[s, "ref_groups_observed"] = len(rs)
+        if len(rs) < min_groups:
+            continue
+        out.loc[s, "caution_basis"] = "holdout"
+        k_r, n_r = int(rs["recovered"].sum()), len(rs)
+        out.loc[s, "ref_recovery_rate"] = k_r / n_r
+        out.loc[s, "ref_uncertain_fraction"] = float(rs["uncertain_fraction"].median())
+        if not len(qs):
+            continue
+        k_q, n_q = int(qs["recovered"].sum()), len(qs)
+        out.loc[s, "cmp_recovery_rate"] = k_q / n_q
+        p_rec = float(fisher_exact([[k_q, n_q - k_q], [k_r, n_r - k_r]], alternative="less").pvalue)
+        out.loc[s, "recovery_p"] = p_rec
+        out.loc[s, "recovery_worse"] = bool(p_rec < alpha and k_r / n_r - k_q / n_q > margin)
+        uq = qs["uncertain_fraction"].to_numpy(dtype=float)
+        ur = rs["uncertain_fraction"].to_numpy(dtype=float)
+        out.loc[s, "cmp_uncertain_fraction"] = float(np.median(uq))
+        p_unc = (
+            float(mannwhitneyu(uq, ur, alternative="greater").pvalue)
+            if np.ptp(np.concatenate([uq, ur])) > 0
+            else 1.0
+        )
+        out.loc[s, "uncertain_p"] = p_unc
+        out.loc[s, "uncertain_worse"] = bool(
+            p_unc < alpha and np.median(uq) - np.median(ur) > margin
+        )
     return out
 
 

@@ -739,3 +739,146 @@ def test_knn_score_finds_a_withheld_state_between_elongated_states():
     # the elongated absorbing states hide the population from the centroid distance
     assert auc["knn_novelty"] > auc["novelty"] + 0.15
     assert auc["joint_novelty"] > auc["novelty"]
+
+
+def _group_rows(state, recovered, uncertain):
+    return pd.DataFrame(
+        {
+            "group": [f"G{i}" for i in range(len(recovered))],
+            "state": state,
+            "observed": True,
+            "recovered": recovered,
+            "uncertain_fraction": uncertain,
+        }
+    )
+
+
+def test_caution_against_holdout_judges_donors_not_cut_offs():
+    from statetrace import novelty
+
+    ref = pd.concat(
+        [
+            _group_rows("A", [True] * 12, [0.02] * 12),
+            _group_rows("B", [True] * 12, [0.25] * 6 + [0.3] * 6),
+            _group_rows("C", [True] * 2, [0.0] * 2),
+        ]
+    )
+    qry = pd.concat(
+        [
+            _group_rows("A", [True] * 10 + [False] * 10, [0.3] * 20),  # worse on both
+            _group_rows("B", [True] * 11, [0.27] * 11),  # as uncertain as the reference
+            _group_rows("C", [False] * 5, [0.5] * 5),  # reference too thin to judge
+        ]
+    )
+    out = novelty.caution_against_holdout(
+        qry, ref, ["A", "B", "C"], alpha=0.05, margin=0.1, min_groups=3
+    )
+    assert out.loc["A", "recovery_worse"] and out.loc["A", "uncertain_worse"]
+    assert out.loc["A", "cmp_recovery_rate"] == 0.5 and out.loc["A", "ref_recovery_rate"] == 1.0
+    # 11/11 recovering and 27% uncertain, like the reference's own donors: no caution
+    assert not out.loc["B", "recovery_worse"] and not out.loc["B", "uncertain_worse"]
+    assert out.loc["C", "caution_basis"] == "fixed" and out.loc["A", "caution_basis"] == "holdout"
+    # a significant but immaterial difference stays below the margin
+    small = novelty.caution_against_holdout(
+        _group_rows("A", [True] * 40, [0.07] * 40),
+        _group_rows("A", [True] * 40, [0.02] * 40),
+        ["A"],
+        alpha=0.05,
+        margin=0.1,
+        min_groups=3,
+    )
+    assert small.loc["A", "uncertain_p"] < 0.05 and not small.loc["A", "uncertain_worse"]
+    none = novelty.caution_against_holdout(qry, None, ["A"], alpha=0.05, margin=0.1, min_groups=3)
+    assert none.loc["A", "caution_basis"] == "fixed"
+
+
+def test_holdout_caution_basis_replaces_the_cut_offs():
+    cfg = TransportConfig(caution_calibration="holdout")
+    base = {
+        "n_cells": 500,
+        "groups_observed": 11,
+        "groups_recovered": 7,
+        "recovery_rate": 7 / 11,
+        "ref_reproducibility": "stable",
+        "shift_level": "low",
+        "ood_fraction": 0.0,
+        "uncertain_fraction": 0.3,
+        "groups_recovered_in_reference": 11,
+        "shift_in_reference_level": "low",
+        "caution_basis": "holdout",
+        "recovery_worse": False,
+        "uncertain_worse": False,
+    }
+    from statetrace.transport import caution_reasons
+
+    # below the fixed bars but no worse than held-out reference donors
+    assert transport_status(base, cfg) == "supported"
+    assert transport_status({**base, "caution_basis": "fixed"}, cfg) == "supported_with_caution"
+    assert caution_reasons({**base, "caution_basis": "fixed"}, cfg) == ["recovery", "uncertainty"]
+    worse = {**base, "recovery_worse": True, "shift_level": "moderate"}
+    assert transport_status(worse, cfg) == "supported_with_caution"
+    assert caution_reasons(worse, cfg) == ["recovery", "shift"]
+    with pytest.raises(ValueError):
+        TransportConfig(caution_calibration="cells")
+    with pytest.raises(ValueError):
+        TransportConfig(caution_alpha=0.0)
+
+
+def _two_study_overlap(seed: int):
+    ref, qry, _ = simulate_transport(
+        n_ref_groups=12,
+        n_query_groups=8,
+        n_states=6,
+        state_separation=1.0,
+        donor_effect=0.5,
+        cohort_effect=0.5,
+        n_latent=10,
+        seed=seed,
+    )
+    donors = ref.obs["donor_id"].astype(str)
+    second = donors.isin(sorted(donors.unique())[6:]).to_numpy()
+    Z = np.asarray(ref.obsm["X_latent"], dtype=np.float64)
+    Z[second] += np.random.default_rng(100 + seed).normal(0.0, 0.5, size=Z.shape[1])
+    ref.obsm["X_latent"] = Z.astype(np.float32)
+    ref.obs["study"] = pd.Categorical(np.where(second, "B", "A"))
+    return ref, qry
+
+
+def test_holdout_caution_spares_states_whose_reference_donors_are_as_mixed():
+    """Overlapping states: the fixed cut-offs caution most of them in every query; judged
+    against study-held-out reference donors, a query from a new cohort is cautioned only
+    where it is worse than a new reference donor would be."""
+    n_fixed = n_holdout = 0
+    for seed in (1, 2):
+        ref, qry = _two_study_overlap(seed)
+        sref = Reference(
+            ref,
+            group_key="donor_id",
+            state_key="cell_state",
+            latent_key="X_latent",
+            study_key="study",
+        ).fit()
+        sref.leave_one_group_out(calibration_unit="study")
+        routes = {
+            mode: validate_transport(
+                sref, qry, group_key="donor_id", config=TransportConfig(caution_calibration=mode)
+            )
+            for mode in ("fixed", "holdout")
+        }
+        trig = {
+            m: int(r.states["caution_reasons"].str.contains("recovery|uncertainty").sum())
+            for m, r in routes.items()
+        }
+        n_fixed += trig["fixed"]
+        n_holdout += trig["holdout"]
+        st = routes["holdout"].states
+        assert list(st.columns) == list(STATE_COLUMNS)
+        assert (st["caution_basis"] == "holdout").all()
+        assert st["ref_recovery_rate"].between(0, 1).all()
+        assert routes["holdout"].reference["caution_calibration"] == "holdout"
+        assert routes["fixed"].reference["caution_calibration"] == "fixed"
+        assert (routes["fixed"].states["caution_basis"] == "fixed").all()
+        caution = st["status"] == "supported_with_caution"
+        assert (st.loc[caution, "caution_reasons"] != "").all()
+        assert (st.loc[~caution, "caution_reasons"] == "").all()
+    assert n_fixed >= 5 and n_holdout <= 1, (n_fixed, n_holdout)
