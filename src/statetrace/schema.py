@@ -33,8 +33,8 @@ TRANSPORT_STATUS = ("supported", "supported_with_caution", "shifted", "insuffici
 SHIFT_LEVELS = ("low", "moderate", "high", "unknown")
 SHIFT_SOURCES = ("expression", "latent", "none")  # coordinate system behind a shift call
 VALIDATION_METHODS = ("leave_one_group_out", "leave_one_study_out", "random_split")
-CALIBRATION_UNITS = ("group", "study")  # holdout unit behind the novelty null
-REPRODUCIBILITY_SPACES = ("latent", "expression")  # space behind the reproducibility call
+CALIBRATION_UNITS = ("auto", "group", "study")  # holdout unit behind the novelty null
+REPRODUCIBILITY_SPACES = ("auto", "latent", "expression")  # space behind the reproducibility call
 # two-sample tests of a reference state against its query cells (statetrace.twosample)
 TWO_SAMPLE_ENGINES = ("edistance", "scxmatch")
 TWO_SAMPLE_LEVELS = ("cell", "donor")  # sampled cells, or donor x state pseudobulk profiles

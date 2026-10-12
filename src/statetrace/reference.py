@@ -330,6 +330,13 @@ class StateReference:
             cfg = dataclasses.replace(cfg, **overrides)
         return cfg
 
+    def _has_expression_coords(self) -> bool:
+        return (
+            self.adata is not None
+            and self.expression_ is not None
+            and self.expression_.has_cell_space
+        )
+
     def _expression_coords(self) -> np.ndarray:
         """Every reference cell in the frozen cell-level expression space."""
         if self.adata is None:
@@ -355,7 +362,11 @@ class StateReference:
         n_splits: int = 5,
     ) -> ValidationResult:
         self._check_fitted()
-        coords = self._expression_coords() if config.reproducibility_space == "expression" else None
+        coords = None
+        if config.reproducibility_space == "expression" or (
+            config.reproducibility_space == "auto" and self._has_expression_coords()
+        ):
+            coords = self._expression_coords()
         return run_validation(
             method=method,
             group_key=group_key,

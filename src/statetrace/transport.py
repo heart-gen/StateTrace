@@ -157,7 +157,7 @@ class TransportConfig:
         Below / above these -> ``supported_with_caution`` (``caution_calibration="fixed"``,
         and for any state the held-out comparison cannot judge).
     caution_calibration, caution_alpha, caution_margin
-        ``"fixed"`` (default) applies the two cut-offs above. ``"holdout"`` asks instead
+        ``"fixed"`` applies the two cut-offs above. ``"holdout"`` (default) asks instead
         whether the query's groups do worse than held-out reference groups do. Both are
         measured from StateTrace's own cell evidence in the mapper's latent (local support
         standing in for confidence; the same out-of-reference rule, support thresholds and
@@ -231,7 +231,7 @@ class TransportConfig:
     min_groups_recovered: int = 3
     caution_recovery_rate: float = 0.8
     caution_uncertain_fraction: float = 0.2
-    caution_calibration: str = "fixed"
+    caution_calibration: str = "holdout"
     caution_alpha: float = 0.05
     caution_margin: float = 0.1
     max_ood_fraction: float = 0.3

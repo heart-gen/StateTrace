@@ -27,8 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query from a new study is judged against between-study differences an offset does not
   remove. States without enough study-held-out evidence keep the group null;
   `distance_calibration["calibration_unit"]` and `route.reference["novelty_calibration_unit"]`
-  record the choice. Reproducibility still comes from the group holdout. Default `"group"`
-  (unchanged).
+  record the choice. Reproducibility still comes from the group holdout. Default `"auto"`
+  (see Changed).
 - `LODOConfig(reproducibility_space="expression")`: the `reproducibility` category is judged
   by the grouped holdout repeated with the kNN on every reference cell in the frozen
   cell-level expression space (`expression.cell_coordinates`), built from counts alone, so
@@ -36,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   latent call is kept as `reproducibility_latent`; the expression holdout adds
   `reproducibility_expression` and `*_expression` metrics. Transport reports
   `ref_reproducibility_latent` and `ref_reproducibility_expression` beside the deciding
-  `ref_reproducibility`, and `route.reference["reproducibility_space"]`. Default `"latent"`
-  (unchanged).
+  `ref_reproducibility`, and `route.reference["reproducibility_space"]`. Default `"auto"`
+  (see Changed).
 - Elongated states and a withheld state between two states in the simulator:
   `simulate_reference` / `simulate_transport(state_anisotropy=, anisotropic_dims=)` stretch
   each state's noise along its own random directions (drawn from a separate generator, so
@@ -57,9 +57,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ref_groups_observed`, `cmp_recovery_rate`, `ref_recovery_rate`, `recovery_p`,
   `cmp_uncertain_fraction`, `ref_uncertain_fraction`, `uncertain_p` and, in every mode,
   `caution_reasons` (also in the report); `route.reference["caution_calibration"]`. Default
-  `"fixed"` (unchanged).
+  `"holdout"` (see Changed).
 
 ### Changed
+- **Defaults that change results on the same data** (benchmark gate G1 failed on 0.1.0: the
+  status differed across mappers and the centroid novelty score lost withheld populations;
+  every fix was chosen on the simulator, never on the G1 data):
+  - `LODOConfig.reproducibility_space` defaults to `"auto"`: the frozen cell-level expression
+    space when the reference has it, else the latent. The reproducibility call no longer
+    depends on which mapper's latent the reference sits in.
+  - `LODOConfig.calibration_unit` defaults to `"auto"`: the study-held-out null when the
+    reference has at least two studies, else the donor-held-out null.
+  - `TransportConfig.caution_calibration` defaults to `"holdout"`: caution when the query's
+    donors do measurably worse than held-out reference donors, not when a noisy rate crosses
+    a fixed cut-off.
+  - `ValidationResult.config` records the resolved values. `reproducibility_space="latent"`,
+    `calibration_unit="group"` and `caution_calibration="fixed"` reproduce 0.1.0.
+  - `TransportConfig.ood_score` (still `"centroid"`): to be set from the withheld-state curve
+    on elongated states (StateTrace-benchmarking S1.3b, `withheld_geometry_curve.csv`) by a
+    rule fixed on 2026-10-12, before any result of that curve. Over the G1 mappers (scANVI,
+    scPoli, Symphony): (1) primary = mean AUROC on elongated states with the withheld state
+    between two (stretch 3, t = 0.2, 0.35, 0.5); (2) on round states at the default
+    placement (the G0 geometry), mean AUROC no more than 0.02 below centroid and no mapper
+    more than 0.05 below; (3) false rate of the score's q95 rule no more than 0.02 above
+    centroid's; (4) among `knn` and `joint` meeting (2) and (3), the higher primary wins if it
+    beats centroid by at least 0.02, `joint` when the two are within 0.01; else `centroid`.
 - `validate_transport` raises when a query group (donor) is also a reference group, unless
   `TransportConfig(allow_group_overlap=True)` (the explicit cell-level control); it warns when
   the reference is not frozen and records the check in `route.reference["independence"]`.

@@ -40,9 +40,9 @@ reading aid. The thresholds are configurable and should be predeclared in a benc
 
 ### Which space decides it
 
-By default the holdout runs in the reference's latent, so the category describes the state in
-that latent: the same reference cells can be `stable` in one mapper's latent and `fragile` in
-another's. `LODOConfig(reproducibility_space="expression")` repeats the holdout with the kNN on
+In the reference's latent (`reproducibility_space="latent"`) the category describes the state
+in that latent: the same reference cells can be `stable` in one mapper's latent and `fragile`
+in another's. `LODOConfig(reproducibility_space="expression")` repeats the holdout with the kNN on
 every reference cell projected into the frozen cell-level expression space (log-normalised
 selected genes, standardised, principal components fitted on a seeded per-state sample of
 reference cells; see {func}`~statetrace.expression.cell_coordinates`). That space is built
@@ -53,6 +53,10 @@ and the expression holdout adds `reproducibility_expression`, `n_groups_scored_e
 `group_recovery_rate_expression`. It needs the reference AnnData and the cell-level space
 (`ExpressionConfig.cell_sample_per_state > 0`). The expression space is fitted with every
 group present: the same fixed-space optimism as a fixed latent.
+
+The default, `"auto"`, judges in the expression space whenever the reference has it and falls
+back to the latent otherwise (no counts, `expression=False`, or a loaded frozen reference);
+`ValidationResult.config.reproducibility_space` records the space applied.
 
 ## External backends
 
@@ -76,6 +80,14 @@ With the built-in kNN, every fold also records the distance of each held-out cel
 centroid of its state built from the training groups. The per-state mean, sd and quantiles of
 those distances (`ValidationResult.distance_calibration`) are the null distribution for a genuine
 cell of the state from an unseen donor; transport uses them to standardise novelty.
+
+`LODOConfig.calibration_unit` sets the holdout behind that null. `"group"` holds out one donor
+at a time; `"study"` holds out one study at a time, so the null also carries the
+between-study differences a donor offset does not remove, which is what a query from a new
+study brings. The default, `"auto"`, uses `"study"` when the reference has a `study_key` with
+at least two studies (and an array backend), else `"group"`; states seen in too few
+study-held-out donors keep the group null (`distance_calibration["calibration_unit"]`). The
+same held-out donors are the null for the caution triggers in transport.
 
 ## Random split
 

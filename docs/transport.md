@@ -123,7 +123,7 @@ least `min_confidence` when a confidence exists, out-of-reference fraction at mo
 | Column | Meaning |
 |---|---|
 | `ref_groups`, `ref_reproducibility` | donors supporting the state in the reference and its grouped-holdout category (`unvalidated` if no holdout ran) |
-| `ref_reproducibility_latent`, `ref_reproducibility_expression` | the grouped-holdout category in the mapping latent and in the frozen expression space (empty unless `LODOConfig.reproducibility_space="expression"`); `ref_reproducibility` is the one `reproducibility_space` chose, recorded in `route.reference["reproducibility_space"]` |
+| `ref_reproducibility_latent`, `ref_reproducibility_expression` | the grouped-holdout category in the mapping latent and in the frozen expression space (empty when the reference was judged in the latent only); `ref_reproducibility` is the one `reproducibility_space` chose, recorded in `route.reference["reproducibility_space"]` |
 | `groups_observed`, `groups_recovered`, `recovery_rate` | query donors observing and recovering the state |
 | `n_cells`, `n_cells_supported` | query cells assigned to the state, and those with local reference support |
 | `median_confidence`, `median_support`, `uncertain_fraction`, `ood_fraction` | over the query cells assigned to the state |
@@ -163,7 +163,7 @@ fraction above 0.2) read that off noisy donor counts and ignore how the referenc
 behaves: with 11 donors, 11/11 recovering has a 95% interval of 0.74-1.00, and a state whose
 own reference donors are 25% uncertain is cautioned in every query.
 
-`TransportConfig(caution_calibration="holdout")` asks instead whether the query's donors do
+`TransportConfig(caution_calibration="holdout")` (the default; `"fixed"` restores the cut-offs) asks instead whether the query's donors do
 worse than a new reference donor does. Every held-out donor of grouped validation and every
 query donor is measured the same way, from StateTrace's own evidence in the mapper's latent
 (local support in place of confidence, the active out-of-reference rule, the per-state

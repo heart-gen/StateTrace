@@ -78,8 +78,10 @@ class LODOConfig:
         Seed for the random-split fold assignment.
     calibration_unit
         Holdout unit behind the novelty null (held-out distances, their quantiles and the
-        population thresholds) of a leave-one-group-out run. ``"group"`` (default) holds out
-        one group (donor) at a time. ``"study"`` holds out one study at a time, removing each
+        population thresholds) of a leave-one-group-out run. ``"auto"`` (default) is
+        ``"study"`` when the reference carries at least two studies and an array backend,
+        else ``"group"``; the result's ``config`` records the unit applied. ``"group"`` holds
+        out one group (donor) at a time. ``"study"`` holds out one study at a time, removing each
         held-out donor's own latent offset as for a query donor, so the null carries the
         between-study differences an offset does not remove, which is what a query from a new
         study brings; it needs study labels (``study_key``) with at least two studies. A state
@@ -88,8 +90,10 @@ class LODOConfig:
         group-holdout null; ``distance_calibration["calibration_unit"]`` records which one each
         state uses. Reproducibility always comes from the group holdout.
     reproducibility_space
-        Coordinates the ``reproducibility`` category is judged in. ``"latent"`` (default) runs
-        the grouped holdout in the reference's latent, so the call depends on the mapper whose
+        Coordinates the ``reproducibility`` category is judged in. ``"auto"`` (default) is
+        ``"expression"`` when the reference AnnData and a cell-level expression space are
+        available, else ``"latent"``; the result's ``config`` records the space applied.
+        ``"latent"`` runs the grouped holdout in the reference's latent, so the call depends on the mapper whose
         latent it is. ``"expression"`` runs the same holdout with the built-in kNN on every
         reference cell projected into the frozen cell-level expression space
         (:func:`statetrace.expression.cell_coordinates`), built from counts alone, so every
@@ -108,8 +112,8 @@ class LODOConfig:
     n_jobs: int = 1
     refit_latent: bool = False
     random_state: int = 0
-    calibration_unit: str = "group"
-    reproducibility_space: str = "latent"
+    calibration_unit: str = "auto"
+    reproducibility_space: str = "auto"
 
     def __post_init__(self) -> None:
         if self.calibration_unit not in schema.CALIBRATION_UNITS:
@@ -629,6 +633,25 @@ def summarize_holdout(
     )
 
 
+def resolve_config(
+    config: LODOConfig,
+    *,
+    study_labels: np.ndarray | None,
+    expression_coords: np.ndarray | None,
+    is_array: bool,
+) -> LODOConfig:
+    """Replace ``"auto"`` options by what this reference supports (see :class:`LODOConfig`)."""
+    changes: dict[str, str] = {}
+    if config.reproducibility_space == "auto":
+        changes["reproducibility_space"] = (
+            "expression" if expression_coords is not None else "latent"
+        )
+    if config.calibration_unit == "auto":
+        n_studies = len(set(map(str, study_labels))) if study_labels is not None else 0
+        changes["calibration_unit"] = "study" if n_studies >= 2 and is_array else "group"
+    return dataclasses.replace(config, **changes) if changes else config
+
+
 def run_validation(
     *,
     method: str,
@@ -666,6 +689,10 @@ def run_validation(
     y = np.asarray([str(s) for s in state_labels], dtype=object)
     groups = np.asarray([str(g) for g in group_labels], dtype=object)
     state_codes = np.searchsorted(states, y)
+    is_array = isinstance(backend, MappingBackend) and not isinstance(backend, AnnDataBackend)
+    config = resolve_config(
+        config, study_labels=study_labels, expression_coords=expression_coords, is_array=is_array
+    )
     if method == "random_split":
         folds = random_split_folds(state_codes, n_splits=n_splits, random_state=config.random_state)
     else:
@@ -674,7 +701,6 @@ def run_validation(
         "running %s over %r with %d folds on %d cells", method, group_key, len(folds), len(y)
     )
 
-    is_array = isinstance(backend, MappingBackend) and not isinstance(backend, AnnDataBackend)
     if is_array:
         if X is None:
             raise ValueError("an array backend needs the latent matrix X")

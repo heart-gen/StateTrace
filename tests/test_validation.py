@@ -2,6 +2,7 @@ import warnings
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 from conftest import REF_KW, blurred_reference
 from sklearn.linear_model import LogisticRegression
@@ -35,7 +36,7 @@ STATE_COLS = [
 
 
 def test_logo_output_schema(fitted_small, small_ref):
-    res = fitted_small.leave_one_group_out()
+    res = fitted_small.leave_one_group_out(reproducibility_space="latent")
     assert (
         isinstance(res, ValidationResult)
         and res.method == "leave_one_group_out"
@@ -249,7 +250,7 @@ def test_expression_reproducibility_is_the_same_in_every_latent(tmp_path):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             ref = Reference(a.copy(), **{**REF_KW, "latent_key": key}).fit()
-        latent = ref.leave_one_group_out().state_metrics
+        latent = ref.leave_one_group_out(reproducibility_space="latent").state_metrics
         res = ref.leave_one_group_out(reproducibility_space="expression")
         sm = res.state_metrics
         # the latent holdout keeps its metrics; its call moves to reproducibility_latent
@@ -286,3 +287,33 @@ def test_expression_reproducibility_needs_the_cell_space(small_ref, tmp_path):
     loaded = Reference.load(tmp_path / "ref.statetrace").fit()
     with pytest.raises(ValueError, match="AnnData"):
         loaded.leave_one_group_out(reproducibility_space="expression")
+
+
+def test_auto_options_resolve_to_what_the_reference_supports():
+    a = blurred_reference()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(a.copy(), **REF_KW).fit()
+    res = ref.leave_one_group_out()
+    # counts and a cell-level space: expression; one study: the group null
+    assert res.config.reproducibility_space == "expression"
+    assert res.config.calibration_unit == "group"
+    assert "reproducibility_expression" in res.state_metrics
+    assert "expression space" in res.summary()
+    # no expression space: the latent call
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bare = Reference(a.copy(), **REF_KW, expression=False).fit()
+    assert bare.leave_one_group_out().config.reproducibility_space == "latent"
+    # two studies: the study-held-out null
+    b = a.copy()
+    donors = sorted(b.obs["donor_id"].astype(str).unique())
+    b.obs["study"] = pd.Categorical(
+        np.where(b.obs["donor_id"].astype(str).isin(donors[: len(donors) // 2]), "A", "B")
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        two = Reference(b, **REF_KW, study_key="study").fit()
+    res2 = two.leave_one_group_out(reproducibility_space="latent")
+    assert res2.config.calibration_unit == "study"
+    assert res2.config.reproducibility_space == "latent"
