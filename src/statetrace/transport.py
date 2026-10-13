@@ -134,9 +134,10 @@ class TransportConfig:
         it gives; ``"fixed"`` or a reference without calibration uses ``min_support`` for
         every state. ``min_support=None`` disables the rule.
     ood_score, ood_rule, ood_z, ood_quantile
-        Out-of-reference call. ``ood_score`` is the evidence: ``"centroid"`` (distance to the
-        state's reference centroid), ``"knn"`` (distance to the k-th nearest reference cell)
-        or ``"joint"`` (the larger of the two standardised distances). ``ood_rule="z"`` flags a
+        Out-of-reference call. ``ood_score`` is the evidence: ``"knn"`` (default; distance to
+        the k-th nearest reference cell), ``"centroid"`` (distance to the state's reference
+        centroid; the 0.1.0 default) or ``"joint"`` (the larger of the two standardised
+        distances). ``ood_rule="z"`` flags a
         cell whose standardised score exceeds ``ood_z``; ``"quantile"`` flags one whose score
         exceeds the ``ood_quantile`` (0.95 or 0.99) of the held-out reference cells of its
         state, which fixes the false rate on new donors at about the nominal level. The
@@ -222,7 +223,7 @@ class TransportConfig:
     support_neighbors: int = 15
     support_calibration: str = "holdout"
     support_quantile: float = 0.05
-    ood_score: str = "centroid"
+    ood_score: str = "knn"
     ood_rule: str = "z"
     ood_quantile: float = 0.99
     population_calibration: str = "holdout"

@@ -124,7 +124,8 @@ data with a shift diagnostic that does not depend on the mapper's latent.
   hard cell) but the 3-sd rule flags under a tenth of them. The withheld-state curve over
   separation (`simulation.withheld_state`) chose the held-out 95th-percentile rule,
   predeclared 2026-09-30 (`ood_score` centroid; the joint centroid + kNN score is the
-  amendment candidate). Done.
+  amendment candidate). Done. The default score became `knn` on 2026-10-12, chosen by a rule
+  fixed before the elongated-state curve (S1.3b) was read (see CHANGELOG).
 - Calibrated novelty stack: kNN distance and joint scores from the held-out folds
   (`ValidationResult.holdout_evidence`), per-state support threshold, per-state
   `novel_population` threshold from held-out reference donors. Done.

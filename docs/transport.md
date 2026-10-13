@@ -82,9 +82,10 @@ in for confidence (`confidence_source = "support"`, recorded per state and in
 alone, `confidence_source` is `none`, and every state is at most `supported_with_caution`.
 
 **Out-of-reference rule** (`ood_score`, `ood_rule`). The score is the evidence:
-`"centroid"` (default; distance to the state's reference centroid), `"knn"` (distance to the
-k-th nearest reference cell, which sees a population that sits at a normal radius but in a
-different direction) or `"joint"` (the larger of the two standardised distances). The rule
+`"knn"` (default; distance to the k-th nearest reference cell, which sees a population that
+sits at a normal radius but in a different direction, or inside the long axis of an elongated
+neighbouring state), `"centroid"` (distance to the state's reference centroid; the 0.1.0
+default) or `"joint"` (the larger of the two standardised distances). The rule
 `"z"` (default) flags a cell whose standardised score exceeds `ood_z` (3); `"quantile"` flags
 a cell whose score exceeds the `ood_quantile` (0.95 or 0.99) of the held-out reference cells
 of its state, stored by grouped validation, so genuine cells of an intact state from a new
@@ -93,7 +94,11 @@ need that calibration; without it the centroid z rule is applied and
 `route.reference["ood_rule"]`, `["ood_score"]` and `["ood_fallback"]` say so. The
 benchmark's withheld-state curve (`statetrace_benchmark.simulation.withheld_state`) traces
 power and false rate of every score and rule over state separation; the rule used on real
-data is predeclared from it.
+data is predeclared from it. The default score was chosen from its elongated-state arm
+(S1.3b): with stretched states and the withheld state between two, the kNN score ranked
+withheld cells at mean AUROC 0.86 against 0.68 for the centroid over scANVI, scPoli and
+Symphony, with no loss on round states (0.95 both) and a q95 false rate of 0.042 against
+0.048.
 
 **Held-out evidence.** Grouped validation stores, per reference cell, the three quantities
 measured against the training donors only (`ValidationResult.holdout_evidence`: centroid

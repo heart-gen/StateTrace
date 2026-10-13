@@ -304,7 +304,7 @@ def test_ood_rule_quantile(transport_pair):
         qry,
         group_key="donor_id",
         query_state_key="cell_state",
-        config=TransportConfig(ood_rule="quantile", ood_quantile=0.95),
+        config=TransportConfig(ood_score="centroid", ood_rule="quantile", ood_quantile=0.95),
     )
     assert r_q.reference["ood_rule"] == "quantile"
     cells = r_q.cells

@@ -72,16 +72,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     donors do measurably worse than held-out reference donors, not when a noisy rate crosses
     a fixed cut-off.
   - `ValidationResult.config` records the resolved values. `reproducibility_space="latent"`,
-    `calibration_unit="group"` and `caution_calibration="fixed"` reproduce 0.1.0.
-  - `TransportConfig.ood_score` (still `"centroid"`): to be set from the withheld-state curve
-    on elongated states (StateTrace-benchmarking S1.3b, `withheld_geometry_curve.csv`) by a
-    rule fixed on 2026-10-12, before any result of that curve. Over the G1 mappers (scANVI,
+    `calibration_unit="group"`, `caution_calibration="fixed"` and `ood_score="centroid"`
+    reproduce 0.1.0.
+  - `TransportConfig.ood_score` defaults to `"knn"` (was `"centroid"`), set from the
+    withheld-state curve on elongated states (StateTrace-benchmarking S1.3b,
+    `withheld_geometry_curve.csv`; 240 runs, 5 seeds, StateTrace `93e7261`) by a rule fixed
+    on 2026-10-12, before any result of that curve. Over the G1 mappers (scANVI,
     scPoli, Symphony): (1) primary = mean AUROC on elongated states with the withheld state
     between two (stretch 3, t = 0.2, 0.35, 0.5); (2) on round states at the default
     placement (the G0 geometry), mean AUROC no more than 0.02 below centroid and no mapper
     more than 0.05 below; (3) false rate of the score's q95 rule no more than 0.02 above
     centroid's; (4) among `knn` and `joint` meeting (2) and (3), the higher primary wins if it
     beats centroid by at least 0.02, `joint` when the two are within 0.01; else `centroid`.
+    Result (mean AUROC; centroid / knn / joint): elongated, between 0.680 / 0.859 / 0.812;
+    round 0.949 / 0.949 / 0.955, per mapper knn within 0.006 of centroid; q95 false rate
+    0.048 / 0.042 / 0.047; q95 power on elongated 0.16 / 0.49 / 0.42. Both candidates were
+    eligible and knn led joint by 0.047, so `knn`. Without held-out calibration the centroid
+    z rule still applies (`route.reference["ood_fallback"]`).
 - `validate_transport` raises when a query group (donor) is also a reference group, unless
   `TransportConfig(allow_group_overlap=True)` (the explicit cell-level control); it warns when
   the reference is not frozen and records the check in `route.reference["independence"]`.
