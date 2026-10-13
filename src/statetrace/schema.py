@@ -33,10 +33,18 @@ TRANSPORT_STATUS = ("supported", "supported_with_caution", "shifted", "insuffici
 SHIFT_LEVELS = ("low", "moderate", "high", "unknown")
 SHIFT_SOURCES = ("expression", "latent", "none")  # coordinate system behind a shift call
 VALIDATION_METHODS = ("leave_one_group_out", "leave_one_study_out", "random_split")
+CALIBRATION_UNITS = ("auto", "group", "study")  # holdout unit behind the novelty null
+REPRODUCIBILITY_SPACES = ("auto", "latent", "expression")  # space behind the reproducibility call
+# two-sample tests of a reference state against its query cells (statetrace.twosample)
+TWO_SAMPLE_ENGINES = ("edistance", "scxmatch")
+TWO_SAMPLE_LEVELS = ("cell", "donor")  # sampled cells, or donor x state pseudobulk profiles
+TWO_SAMPLE_SUBSETS = ("all", "in_reference")  # every assigned cell, or in-reference cells only
+TEST_STATUS = ("ok", "unsupported", "error", "skipped")
 
 # frozen reference format
-FORMAT_VERSION = 3
-MIN_READABLE_FORMAT_VERSION = 2  # v2 lacks the expression/ directory; everything else is identical
+FORMAT_VERSION = 4
+# v2 lacks the expression/ directory and v3 its cell-level space; everything else is identical
+MIN_READABLE_FORMAT_VERSION = 2
 FROZEN_SUFFIX = ".statetrace"
 MANIFEST_FILE = "manifest.json"
 EXPRESSION_DIR = "expression"

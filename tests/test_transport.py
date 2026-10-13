@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import REF_KW
+from conftest import REF_KW, blurred_reference
 
 from statetrace import (
     Predictions,
@@ -304,7 +304,7 @@ def test_ood_rule_quantile(transport_pair):
         qry,
         group_key="donor_id",
         query_state_key="cell_state",
-        config=TransportConfig(ood_rule="quantile", ood_quantile=0.95),
+        config=TransportConfig(ood_score="centroid", ood_rule="quantile", ood_quantile=0.95),
     )
     assert r_q.reference["ood_rule"] == "quantile"
     cells = r_q.cells
@@ -602,3 +602,283 @@ def test_raw_and_residual_displacement_are_both_reported(validated_ref, transpor
     assert (gr["latent_offset_sd"] >= 0).all()
     text = (route.report(tmp_path / "rep") / "report.md").read_text()
     assert "raw/residual" in text and "| donor |" in text
+
+
+def _four_studies(seed: int = 1, study_state_effect: float = 1.0, drop: str | None = None):
+    """16 donors in 4 studies with a state-specific study effect; study st3 is the query."""
+    from statetrace.datasets import simulate_reference
+
+    a = simulate_reference(
+        n_donors=16,
+        n_states=4,
+        n_cells_per_donor=150,
+        donor_effect=0.5,
+        state_separation=4.0,
+        n_latent=10,
+        n_genes=0,
+        seed=seed,
+    )
+    rng = np.random.default_rng(seed + 100)
+    study = a.obs["donor_id"].cat.codes.to_numpy() // 4
+    state = a.obs["cell_state"].cat.codes.to_numpy()
+    a.obs["study"] = pd.Categorical([f"st{k}" for k in study])
+    eta = rng.normal(0.0, study_state_effect, size=(4, 4, 10))
+    a.obsm["X_latent"] = (a.obsm["X_latent"] + eta[study, state]).astype(np.float32)
+    keep = study < 3
+    if drop is not None:  # the state is seen in study st0 only
+        keep &= (study == 0) | (a.obs["cell_state"].to_numpy() != drop)
+    ref, qry = a[keep].copy(), a[study == 3].copy()
+    for d in (ref, qry):
+        for c in ("donor_id", "study", "cell_state"):
+            d.obs[c] = d.obs[c].cat.remove_unused_categories()
+    return ref, qry
+
+
+def test_study_calibration_holds_false_rate_on_a_new_study():
+    from statetrace import LODOConfig
+
+    ref_adata, qry = _four_studies()
+    cfg = TransportConfig(ood_rule="quantile", ood_quantile=0.95)
+    frac, cal = {}, {}
+    for unit in ("group", "study"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = Reference(ref_adata.copy(), study_key="study", **REF_KW).fit()
+            res = ref.leave_one_group_out(calibration_unit=unit)
+            route = validate_transport(
+                ref, qry, group_key="donor_id", query_state_key="cell_state", config=cfg
+            )
+        assert route.reference["novelty_calibration_unit"] == unit
+        assert (res.distance_calibration["calibration_unit"] == unit).all()
+        cal[unit] = res.distance_calibration
+        frac[unit] = (route.cells["category"] == "out_of_reference").mean()
+    # every query state is intact: the donor-level null misses the study effect
+    assert frac["group"] > 0.12 and frac["study"] < 0.10
+    assert (cal["study"]["q95_holdout"] > cal["group"]["q95_holdout"]).all()
+    ev = res.holdout_evidence
+    assert set(ev["unit"]) == {"study"} and ev["group"].isin(ref_adata.obs["donor_id"]).all()
+    with pytest.raises(ValueError, match="calibration_unit"):
+        LODOConfig(calibration_unit="donor")
+
+
+def test_study_calibration_falls_back_per_state(tmp_path):
+    from statetrace.validation import ValidationResult
+
+    ref_adata, _ = _four_studies(drop="S3")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), study_key="study", **REF_KW).fit()
+        res = ref.leave_one_group_out(calibration_unit="study")
+    units = res.distance_calibration["calibration_unit"]
+    assert units["S3"] == "group" and (units.drop("S3") == "study").all()
+    assert res.distance_calibration["q95_holdout"].notna().all()
+    back = ValidationResult.from_dir(res.to_dir(tmp_path / "val"))
+    assert back.config.calibration_unit == "study"
+    assert list(back.distance_calibration["calibration_unit"]) == list(units)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        no_study = Reference(ref_adata.copy(), **REF_KW).fit()
+        with pytest.raises(ValueError, match="study labels"):
+            no_study.leave_one_group_out(calibration_unit="study")
+
+
+def test_transport_reports_both_reproducibility_calls():
+    a = blurred_reference(n_donors=12)
+    ref_donors = [f"D{i:02d}" for i in range(8)]
+    in_ref = a.obs["donor_id"].isin(ref_donors).to_numpy()
+    ref_adata, qry = a[in_ref].copy(), a[~in_ref].copy()
+    for d in (ref_adata, qry):
+        d.obs["donor_id"] = d.obs["donor_id"].cat.remove_unused_categories()
+    status = {}
+    for space in ("latent", "expression"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = Reference(ref_adata.copy(), **{**REF_KW, "latent_key": "X_blur"}).fit()
+            ref.leave_one_group_out(reproducibility_space=space)
+            route = validate_transport(ref, qry, group_key="donor_id", latent_key="X_blur")
+        st = route.states
+        assert route.reference["reproducibility_space"] == space
+        assert st.loc["S1", "ref_reproducibility_latent"] in ("moderate", "fragile")
+        if space == "latent":
+            assert st["ref_reproducibility"].equals(st["ref_reproducibility_latent"])
+            assert st["ref_reproducibility_expression"].isna().all()
+        else:
+            assert st["ref_reproducibility"].equals(st["ref_reproducibility_expression"])
+            assert (st["ref_reproducibility"] == "stable").all()
+        status[space] = st["status"]
+    assert status["latent"]["S1"] != "supported"
+
+
+def test_knn_score_finds_a_withheld_state_between_elongated_states():
+    from sklearn.metrics import roc_auc_score
+
+    ref_adata, qry, _ = simulate_transport(
+        n_ref_groups=8,
+        n_query_groups=6,
+        n_states=6,
+        n_cells_per_group=300,
+        n_latent=10,
+        cohort_effect=0.3,
+        novel_states=["S5"],
+        novel_between={"S5": ("S2", "S3", 0.35)},
+        state_anisotropy=3.0,
+        anisotropic_dims=2,
+        seed=0,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), **REF_KW).fit()
+        ref.leave_one_group_out()
+        route = validate_transport(ref, qry, group_key="donor_id", query_state_key="cell_state")
+    cells = route.cells.reindex(qry.obs_names)
+    novel = qry.obs["cell_state"].astype(str).to_numpy() == "S5"
+    auc = {
+        col: roc_auc_score(novel, cells[col].fillna(cells[col].max()))
+        for col in ("novelty", "knn_novelty", "joint_novelty")
+    }
+    # the elongated absorbing states hide the population from the centroid distance
+    assert auc["knn_novelty"] > auc["novelty"] + 0.15
+    assert auc["joint_novelty"] > auc["novelty"]
+
+
+def _group_rows(state, recovered, uncertain):
+    return pd.DataFrame(
+        {
+            "group": [f"G{i}" for i in range(len(recovered))],
+            "state": state,
+            "observed": True,
+            "recovered": recovered,
+            "uncertain_fraction": uncertain,
+        }
+    )
+
+
+def test_caution_against_holdout_judges_donors_not_cut_offs():
+    from statetrace import novelty
+
+    ref = pd.concat(
+        [
+            _group_rows("A", [True] * 12, [0.02] * 12),
+            _group_rows("B", [True] * 12, [0.25] * 6 + [0.3] * 6),
+            _group_rows("C", [True] * 2, [0.0] * 2),
+        ]
+    )
+    qry = pd.concat(
+        [
+            _group_rows("A", [True] * 10 + [False] * 10, [0.3] * 20),  # worse on both
+            _group_rows("B", [True] * 11, [0.27] * 11),  # as uncertain as the reference
+            _group_rows("C", [False] * 5, [0.5] * 5),  # reference too thin to judge
+        ]
+    )
+    out = novelty.caution_against_holdout(
+        qry, ref, ["A", "B", "C"], alpha=0.05, margin=0.1, min_groups=3
+    )
+    assert out.loc["A", "recovery_worse"] and out.loc["A", "uncertain_worse"]
+    assert out.loc["A", "cmp_recovery_rate"] == 0.5 and out.loc["A", "ref_recovery_rate"] == 1.0
+    # 11/11 recovering and 27% uncertain, like the reference's own donors: no caution
+    assert not out.loc["B", "recovery_worse"] and not out.loc["B", "uncertain_worse"]
+    assert out.loc["C", "caution_basis"] == "fixed" and out.loc["A", "caution_basis"] == "holdout"
+    # a significant but immaterial difference stays below the margin
+    small = novelty.caution_against_holdout(
+        _group_rows("A", [True] * 40, [0.07] * 40),
+        _group_rows("A", [True] * 40, [0.02] * 40),
+        ["A"],
+        alpha=0.05,
+        margin=0.1,
+        min_groups=3,
+    )
+    assert small.loc["A", "uncertain_p"] < 0.05 and not small.loc["A", "uncertain_worse"]
+    none = novelty.caution_against_holdout(qry, None, ["A"], alpha=0.05, margin=0.1, min_groups=3)
+    assert none.loc["A", "caution_basis"] == "fixed"
+
+
+def test_holdout_caution_basis_replaces_the_cut_offs():
+    cfg = TransportConfig(caution_calibration="holdout")
+    base = {
+        "n_cells": 500,
+        "groups_observed": 11,
+        "groups_recovered": 7,
+        "recovery_rate": 7 / 11,
+        "ref_reproducibility": "stable",
+        "shift_level": "low",
+        "ood_fraction": 0.0,
+        "uncertain_fraction": 0.3,
+        "groups_recovered_in_reference": 11,
+        "shift_in_reference_level": "low",
+        "caution_basis": "holdout",
+        "recovery_worse": False,
+        "uncertain_worse": False,
+    }
+    from statetrace.transport import caution_reasons
+
+    # below the fixed bars but no worse than held-out reference donors
+    assert transport_status(base, cfg) == "supported"
+    assert transport_status({**base, "caution_basis": "fixed"}, cfg) == "supported_with_caution"
+    assert caution_reasons({**base, "caution_basis": "fixed"}, cfg) == ["recovery", "uncertainty"]
+    worse = {**base, "recovery_worse": True, "shift_level": "moderate"}
+    assert transport_status(worse, cfg) == "supported_with_caution"
+    assert caution_reasons(worse, cfg) == ["recovery", "shift"]
+    with pytest.raises(ValueError):
+        TransportConfig(caution_calibration="cells")
+    with pytest.raises(ValueError):
+        TransportConfig(caution_alpha=0.0)
+
+
+def _two_study_overlap(seed: int):
+    ref, qry, _ = simulate_transport(
+        n_ref_groups=12,
+        n_query_groups=8,
+        n_states=6,
+        state_separation=1.0,
+        donor_effect=0.5,
+        cohort_effect=0.5,
+        n_latent=10,
+        seed=seed,
+    )
+    donors = ref.obs["donor_id"].astype(str)
+    second = donors.isin(sorted(donors.unique())[6:]).to_numpy()
+    Z = np.asarray(ref.obsm["X_latent"], dtype=np.float64)
+    Z[second] += np.random.default_rng(100 + seed).normal(0.0, 0.5, size=Z.shape[1])
+    ref.obsm["X_latent"] = Z.astype(np.float32)
+    ref.obs["study"] = pd.Categorical(np.where(second, "B", "A"))
+    return ref, qry
+
+
+def test_holdout_caution_spares_states_whose_reference_donors_are_as_mixed():
+    """Overlapping states: the fixed cut-offs caution most of them in every query; judged
+    against study-held-out reference donors, a query from a new cohort is cautioned only
+    where it is worse than a new reference donor would be."""
+    n_fixed = n_holdout = 0
+    for seed in (1, 2):
+        ref, qry = _two_study_overlap(seed)
+        sref = Reference(
+            ref,
+            group_key="donor_id",
+            state_key="cell_state",
+            latent_key="X_latent",
+            study_key="study",
+        ).fit()
+        sref.leave_one_group_out(calibration_unit="study")
+        routes = {
+            mode: validate_transport(
+                sref, qry, group_key="donor_id", config=TransportConfig(caution_calibration=mode)
+            )
+            for mode in ("fixed", "holdout")
+        }
+        trig = {
+            m: int(r.states["caution_reasons"].str.contains("recovery|uncertainty").sum())
+            for m, r in routes.items()
+        }
+        n_fixed += trig["fixed"]
+        n_holdout += trig["holdout"]
+        st = routes["holdout"].states
+        assert list(st.columns) == list(STATE_COLUMNS)
+        assert (st["caution_basis"] == "holdout").all()
+        assert st["ref_recovery_rate"].between(0, 1).all()
+        assert routes["holdout"].reference["caution_calibration"] == "holdout"
+        assert routes["fixed"].reference["caution_calibration"] == "fixed"
+        assert (routes["fixed"].states["caution_basis"] == "fixed").all()
+        caution = st["status"] == "supported_with_caution"
+        assert (st.loc[caution, "caution_reasons"] != "").all()
+        assert (st.loc[~caution, "caution_reasons"] == "").all()
+    assert n_fixed >= 5 and n_holdout <= 1, (n_fixed, n_holdout)

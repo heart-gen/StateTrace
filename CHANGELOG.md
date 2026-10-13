@@ -7,13 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Two-sample engines (`statetrace.twosample`, `TwoSampleConfig`): the E-distance permutation
+  test (native; Euclidean, as in pertpy) and Rosenbaum's cross-match test through scXMatch
+  (Moeller et al., Bioinformatics 2026, doi:10.1093/bioinformatics/btag706; optional, conda
+  only). `TransportConfig(two_sample=...)` runs them for every reference state at cell level
+  (frozen cell-level space) and on donor profiles (held-out reference donors against query
+  donors), over all assigned and in-reference cells; `route.two_sample`, `two_sample.csv` and a
+  report section. Reported evidence only: `status` and `STATE_COLUMNS` are unchanged.
+- Frozen cell-level space in `ExpressionSpace` (`cell_sample_per_state`, `cell_components`,
+  `cell_seed`; `build_cell_space`, `project_cells`) and the held-out reference donor profiles
+  (`null_profiles`); `query_profiles` exposes the standardised donor profiles behind
+  `score_query`.
+- `simulate_transport(spread_states=...)`: a change in spread with the mean kept (truth
+  `spread`, column `spread_factor`).
+- `LODOConfig(calibration_unit="study")`: the novelty null of a leave-one-group-out run
+  (held-out distances, their quantiles, the population thresholds) is built with one study
+  held out at a time, each held-out donor's latent offset removed as for a query donor, so a
+  query from a new study is judged against between-study differences an offset does not
+  remove. States without enough study-held-out evidence keep the group null;
+  `distance_calibration["calibration_unit"]` and `route.reference["novelty_calibration_unit"]`
+  record the choice. Reproducibility still comes from the group holdout. Default `"auto"`
+  (see Changed).
+- `LODOConfig(reproducibility_space="expression")`: the `reproducibility` category is judged
+  by the grouped holdout repeated with the kNN on every reference cell in the frozen
+  cell-level expression space (`expression.cell_coordinates`), built from counts alone, so
+  the same reference cells get the same call whichever mapper's latent they sit in. The
+  latent call is kept as `reproducibility_latent`; the expression holdout adds
+  `reproducibility_expression` and `*_expression` metrics. Transport reports
+  `ref_reproducibility_latent` and `ref_reproducibility_expression` beside the deciding
+  `ref_reproducibility`, and `route.reference["reproducibility_space"]`. Default `"auto"`
+  (see Changed).
+- Elongated states and a withheld state between two states in the simulator:
+  `simulate_reference` / `simulate_transport(state_anisotropy=, anisotropic_dims=)` stretch
+  each state's noise along its own random directions (drawn from a separate generator, so
+  every existing seed is unchanged), and `simulate_transport(novel_between={novel: (a, b,
+  t)})` places a withheld state a fraction `t` of the way from `a` to `b`. With elongated
+  absorbing states the centroid score loses an absorbed population that the kNN distance
+  still finds (`tests/test_transport.py`: AUROC 0.66-0.88 centroid against 0.89-0.98 kNN over
+  three seeds at `t=0.35`, stretch 3); the round-state grid behind the predeclared
+  `ood_score` never showed this.
+- `TransportConfig(caution_calibration="holdout")`: the recovery and uncertainty caution
+  triggers compare the query's donors with held-out reference donors, both measured from
+  StateTrace's own evidence in the mapper's latent (`novelty.group_evidence_table`), instead
+  of fixed cut-offs (recovery below 0.8, uncertain fraction above 0.2): caution when the query
+  is worse with one-sided `p < caution_alpha` (Fisher exact for recovery, Mann-Whitney for
+  per-donor uncertain fractions) and by more than `caution_margin`. States seen in too few
+  held-out donors keep the cut-offs (`caution_basis`). New state columns `caution_basis`,
+  `ref_groups_observed`, `cmp_recovery_rate`, `ref_recovery_rate`, `recovery_p`,
+  `cmp_uncertain_fraction`, `ref_uncertain_fraction`, `uncertain_p` and, in every mode,
+  `caution_reasons` (also in the report); `route.reference["caution_calibration"]`. Default
+  `"holdout"` (see Changed).
+
+### Changed
+- **Defaults that change results on the same data** (benchmark gate G1 failed on 0.1.0: the
+  status differed across mappers and the centroid novelty score lost withheld populations;
+  every fix was chosen on the simulator, never on the G1 data):
+  - `LODOConfig.reproducibility_space` defaults to `"auto"`: the frozen cell-level expression
+    space when the reference has it, else the latent. The reproducibility call no longer
+    depends on which mapper's latent the reference sits in.
+  - `LODOConfig.calibration_unit` defaults to `"auto"`: the study-held-out null when the
+    reference has at least two studies, else the donor-held-out null.
+  - `TransportConfig.caution_calibration` defaults to `"holdout"`: caution when the query's
+    donors do measurably worse than held-out reference donors, not when a noisy rate crosses
+    a fixed cut-off.
+  - `ValidationResult.config` records the resolved values. `reproducibility_space="latent"`,
+    `calibration_unit="group"`, `caution_calibration="fixed"` and `ood_score="centroid"`
+    reproduce 0.1.0.
+  - `TransportConfig.ood_score` defaults to `"knn"` (was `"centroid"`), set from the
+    withheld-state curve on elongated states (StateTrace-benchmarking S1.3b,
+    `withheld_geometry_curve.csv`; 240 runs, 5 seeds, StateTrace `93e7261`) by a rule fixed
+    on 2026-10-12, before any result of that curve. Over the G1 mappers (scANVI,
+    scPoli, Symphony): (1) primary = mean AUROC on elongated states with the withheld state
+    between two (stretch 3, t = 0.2, 0.35, 0.5); (2) on round states at the default
+    placement (the G0 geometry), mean AUROC no more than 0.02 below centroid and no mapper
+    more than 0.05 below; (3) false rate of the score's q95 rule no more than 0.02 above
+    centroid's; (4) among `knn` and `joint` meeting (2) and (3), the higher primary wins if it
+    beats centroid by at least 0.02, `joint` when the two are within 0.01; else `centroid`.
+    Result (mean AUROC; centroid / knn / joint): elongated, between 0.680 / 0.859 / 0.812;
+    round 0.949 / 0.949 / 0.955, per mapper knn within 0.006 of centroid; q95 false rate
+    0.048 / 0.042 / 0.047; q95 power on elongated 0.16 / 0.49 / 0.42. Both candidates were
+    eligible and knn led joint by 0.047, so `knn`. Without held-out calibration the centroid
+    z rule still applies (`route.reference["ood_fallback"]`).
+- `validate_transport` raises when a query group (donor) is also a reference group, unless
+  `TransportConfig(allow_group_overlap=True)` (the explicit cell-level control); it warns when
+  the reference is not frozen and records the check in `route.reference["independence"]`.
+- Frozen format 4: `expression/` adds `null_profiles.npy` and the cell-level space. Format 3
+  bundles still load; their two-sample rows read `unsupported` until re-frozen.
+- Positioning: StateTrace orchestrates shift evidence and is not a distribution-shift test
+  (README, concepts, transport guide, roadmaps).
+
 ### Planned
 - Stage 7 StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
   benchmark design and optional CellART adapter; roadmap only, schedule and version unassigned.
 - scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
 - Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
 - Plotting.
-- Cell-level frozen-expression displacement (the within-donor complement of the pseudobulk shift).
+- Within-donor localisation of a shifted subpopulation (per-cell displacement against held-out
+  reference cells); the state-level cell tests above are done.
 
 ## [0.1.0] - 2026-10-02
 

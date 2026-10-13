@@ -15,7 +15,12 @@ import pandas as pd
 from . import novelty, schema
 from .backends import get_backend
 from .backends.base import AnnDataBackend, MappingBackend
-from .expression import ExpressionConfig, ExpressionSpace, build_expression_space
+from .expression import (
+    ExpressionConfig,
+    ExpressionSpace,
+    build_expression_space,
+    cell_coordinates,
+)
 from .utils import MetadataReport, resolve_latent, validate_metadata
 from .validation import LODOConfig, ValidationResult, run_validation
 
@@ -325,6 +330,29 @@ class StateReference:
             cfg = dataclasses.replace(cfg, **overrides)
         return cfg
 
+    def _has_expression_coords(self) -> bool:
+        return (
+            self.adata is not None
+            and self.expression_ is not None
+            and self.expression_.has_cell_space
+        )
+
+    def _expression_coords(self) -> np.ndarray:
+        """Every reference cell in the frozen cell-level expression space."""
+        if self.adata is None:
+            raise ValueError(
+                "reproducibility_space='expression' needs the reference AnnData; a loaded "
+                "frozen reference keeps the call it was frozen with"
+            )
+        if self.expression_ is None or not self.expression_.has_cell_space:
+            raise ValueError(
+                "reproducibility_space='expression' needs an expression space with its "
+                "cell-level part (ExpressionConfig.cell_sample_per_state > 0)"
+            )
+        layer = self.expression_config.layer if self.expression_config is not None else None
+        X = self.adata.layers[layer] if layer is not None else self.adata.X
+        return cell_coordinates(self.expression_, X, self.adata.var_names)
+
     def _run(
         self,
         method: str,
@@ -334,6 +362,11 @@ class StateReference:
         n_splits: int = 5,
     ) -> ValidationResult:
         self._check_fitted()
+        coords = None
+        if config.reproducibility_space == "expression" or (
+            config.reproducibility_space == "auto" and self._has_expression_coords()
+        ):
+            coords = self._expression_coords()
         return run_validation(
             method=method,
             group_key=group_key,
@@ -351,6 +384,8 @@ class StateReference:
             n_splits=n_splits,
             adata=self.adata if self.uses_anndata_backend else None,
             state_key=self.state_key,
+            study_labels=self.studies_[self.study_codes_] if self.studies_ is not None else None,
+            expression_coords=coords,
         )
 
     def leave_one_group_out(

@@ -96,3 +96,37 @@ def test_simulate_transport_novel_state():
     assert truth.loc["S3", "truth"] == "novel"
     with pytest.raises(KeyError):
         simulate_transport(n_states=3, novel_states=["S9"])
+
+
+def test_anisotropic_states_and_a_withheld_state_between_two():
+    from statetrace.datasets import simulate_transport
+
+    ref, qry, truth = simulate_transport(
+        n_ref_groups=6,
+        n_query_groups=4,
+        n_states=4,
+        n_cells_per_group=400,
+        n_latent=8,
+        cohort_effect=0.0,
+        donor_effect=0.1,
+        novel_states=["S3"],
+        novel_between={"S3": ("S0", "S1", 0.3)},
+        state_anisotropy=3.0,
+        anisotropic_dims=2,
+        seed=4,
+    )
+    assert truth.loc["S3", "truth"] == "novel" and "S3" not in set(ref.obs["cell_state"])
+    z, s = ref.obsm["X_latent"], ref.obs["cell_state"].astype(str).to_numpy()
+    for k in ("S0", "S1", "S2"):
+        ev = np.sort(np.linalg.eigvalsh(np.cov(z[s == k].T)))
+        assert ev[-2] > 6 and ev[-3] < 2  # two stretched directions (sd 3), the rest about 1
+    zq, sq = qry.obsm["X_latent"], qry.obs["cell_state"].astype(str).to_numpy()
+    c0, c1 = z[s == "S0"].mean(axis=0), z[s == "S1"].mean(axis=0)
+    gap = np.linalg.norm(zq[sq == "S3"].mean(axis=0) - (0.7 * c0 + 0.3 * c1))
+    assert gap < 0.1 * np.linalg.norm(c1 - c0)
+    with pytest.raises(ValueError, match="novel_states"):
+        simulate_transport(n_states=4, novel_between={"S3": ("S0", "S1", 0.5)})
+    with pytest.raises(ValueError, match="anchors"):
+        simulate_transport(
+            n_states=4, novel_states=["S2", "S3"], novel_between={"S3": ("S2", "S1", 0.5)}
+        )

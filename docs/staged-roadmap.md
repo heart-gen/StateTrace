@@ -49,6 +49,11 @@ the next readiness gate needs.
   scArches, Symphony, scConform and Azimuth is on a question they do not answer: donor-level
   reproducibility, transport into an independent cohort, shift of a state's molecular phenotype
   beyond the reference's between-donor range, and whether a state may enter a donor-level test.
+- StateTrace is not a distribution-shift test. scXMatch (Moeller et al., *Bioinformatics* 2026,
+  doi:10.1093/bioinformatics/btag706) and the E-distance answer whether two sets of profiles
+  differ; they run as optional engines inside the frozen space (`statetrace.twosample`) and as
+  the shift comparators in the benchmark (reported at G1, gated at G2, decided 2026-10-09), and
+  never decide a status.
 - Two coordinate systems, always: state identity from the mapping space, state shift from the
   frozen expression space. A diagnostic that needs the query present in the latent it is judged
   in is not a shift diagnostic.
@@ -71,6 +76,15 @@ sensitivity thresholds, aggregation and the G1 evaluator). The stage is register
 Stephenson et al. 2021 PBMC (GSE132044 has two donors), the G1 criterion reads fewer than
 three donors and the comparator set is fixed (Symphony in G1; scConform and Azimuth at G2).
 Next: the 7.2 GB download, the Symphony adapter, the run.
+
+2026-10-09: scXMatch was published (2026-10-03) and overlaps the expression-shift arm, so the
+novelty claim moved from "detecting a shifted state" to donor- and cohort-aware
+transportability. The two-sample engines (E-distance native; scXMatch when installed from
+conda) entered the package as reported evidence (frozen format 4 carries the cell-level space
+and the held-out donor profiles they need), `validate_transport` refuses a query that shares a
+donor with the reference, and `simulate_transport` gained a spread-only scenario. The benchmark
+adds scXMatch and the E-distance as shift comparators (G1 reported, G2 gated) with monotonicity
+and subsampling-robustness metrics.
 
 Blocking inputs, by the week they are needed (`INPUTS_NEEDED.md` in the benchmark repository
 has the full list):
@@ -110,7 +124,8 @@ data with a shift diagnostic that does not depend on the mapper's latent.
   hard cell) but the 3-sd rule flags under a tenth of them. The withheld-state curve over
   separation (`simulation.withheld_state`) chose the held-out 95th-percentile rule,
   predeclared 2026-09-30 (`ood_score` centroid; the joint centroid + kNN score is the
-  amendment candidate). Done.
+  amendment candidate). Done. The default score became `knn` on 2026-10-12, chosen by a rule
+  fixed before the elongated-state curve (S1.3b) was read (see CHANGELOG).
 - Calibrated novelty stack: kNN distance and joint scores from the held-out folds
   (`ValidationResult.holdout_evidence`), per-state support threshold, per-state
   `novel_population` threshold from held-out reference donors. Done.

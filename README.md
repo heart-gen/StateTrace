@@ -6,15 +6,19 @@
 [![Docs](https://readthedocs.org/projects/statetrace/badge/?version=latest)](https://statetrace.readthedocs.io/en/latest/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-StateTrace is a backend-independent framework for donor- and cohort-aware validation of
-cellular-state transportability and downstream inference. Mapping tools (scPoli, scANVI/scArches,
-Symphony, Azimuth, CellTypist, or a user classifier) decide which state a cell belongs to.
-StateTrace takes their output and decides something they were not designed to answer: **is a
-cellular state defined in one human cohort reproducible and transportable enough to support
-inference in another?** It treats donors, not cells, as the replication unit; it reports
-reproducibility across reference donors, recovery in an independent cohort, robustness to the
-mapping backend, and distribution shift; and it gates which states may enter differential
-abundance, pseudobulk expression or genetic analyses. It is tissue-, disease- and atlas-agnostic.
+StateTrace is a donor- and cohort-aware framework for determining whether cellular states
+discovered in one dataset remain reproducible, supported, phenotypically preserved and suitable
+for downstream inference in another. Mapping tools (scPoli, scANVI/scArches, Symphony, Azimuth,
+CellTypist, or a user classifier) decide which state a cell belongs to; two-sample tests such as
+[scXMatch](https://doi.org/10.1093/bioinformatics/btag706) and the E-distance decide whether two
+sets of profiles differ. StateTrace takes that evidence and answers what neither was designed to
+answer: **is a cellular state defined in one human cohort reproducible and transportable enough
+to support inference in another?** It treats donors, not cells, as the replication unit; it
+reports reproducibility across reference donors, recovery in an independent cohort, robustness
+to the mapping backend, and whether the query version of a state is the same, a shifted version
+of it or out of reference; and it gates which states may enter differential abundance,
+pseudobulk expression or genetic analyses. It does not map cells and it is not a two-sample
+test. It is tissue-, disease- and atlas-agnostic.
 
 ## Core capabilities
 
@@ -29,8 +33,15 @@ abundance, pseudobulk expression or genetic analyses. It is tissue-, disease- an
   recovering it, uncertain and out-of-reference fractions, centroid shift, and a transport status.
 - **Backend robustness.** `compare_backends` reports cell agreement, per-state concordance and
   whether the transport status agrees across mappers.
-- **Distribution-shift diagnostics.** Absent, shifted and novel populations are distinguished
-  with reference-distance z-scores in the shared latent.
+- **Shift and novelty diagnostics.** Absent, shifted and novel populations are distinguished
+  by a donor x state pseudobulk distance in a frozen expression space built from the reference
+  alone, calibrated against held-out reference donors (it decides the status), with
+  reference-distance z-scores in the mapping latent as secondary evidence.
+- **Two-sample engines (optional, reported).** `TransportConfig(two_sample=TwoSampleConfig(...))`
+  runs the E-distance permutation test and, when installed, scXMatch's cross-match test for every
+  state, at cell level and on donor profiles, inside the frozen space. Their p-values sit next to
+  the status and never decide it: a cell-level test calls genuinely new, unshifted donors
+  "different", which is a statement about cells, not about transporting the state.
 - **Inference gating.** `supported`, `supported_with_caution`, `shifted`, `insufficient`,
   `absent`; `route.pseudobulk(states="supported")` and `route.state_abundance(states="supported")`.
 - **Transport report.** Standardised CSV tables plus a Markdown summary of the evidence for every
@@ -48,6 +59,9 @@ pip install statetrace
 | Extra | Adds | Needed for |
 |---|---|---|
 | `dev` | pytest, pytest-cov, hypothesis, ruff | tests and linting |
+
+The optional scXMatch engine needs the `scxmatch` package, which installs only from conda
+because it depends on graph-tool: `conda install scxmatch -c conda-forge -c bioconda`.
 | `docs` | sphinx, myst-parser, sphinx-rtd-theme | building the docs |
 | `scvi` | scvi-tools (pulls in torch) | the scANVI refit-per-fold backend (planned) |
 | `all` | all of the above | |
@@ -113,8 +127,9 @@ make test PY=.venv/bin/python          # add test-slow for the larger synthetic 
 make docs PY=.venv/bin/python
 ```
 
-Benchmarks (against scPoli, scANVI/scArches, Symphony and scConform, with gated release
-criteria) and the manuscript live in separate repositories (`StateTrace-benchmarking`,
+Benchmarks (scPoli, scANVI/scArches and Symphony as mapping backends, scConform as the
+uncertainty benchmark, scXMatch and the E-distance as the distribution-shift benchmark, with
+gated release criteria) and the manuscript live in separate repositories (`StateTrace-benchmarking`,
 `statetrace-manuscript`).
 
 ## Citation

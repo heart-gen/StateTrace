@@ -87,3 +87,29 @@ def validated_ref(transport_pair):
         ref = Reference(ref_adata.copy(), **REF_KW).fit()
         ref.leave_one_group_out()
     return ref
+
+
+def blurred_reference(n_donors: int = 8, seed: int = 3):
+    """
+    A reference whose counts separate every state, with a second latent ``X_blur`` in which
+    S1 sits on S2 (a mapper that merged them): reproducibility differs by latent.
+    """
+    import numpy as np
+
+    from statetrace.datasets import simulate_reference
+
+    a = simulate_reference(
+        n_donors=n_donors,
+        n_states=4,
+        n_cells_per_donor=200,
+        state_separation=4.0,
+        n_latent=10,
+        n_genes=200,
+        seed=seed,
+    )
+    s = a.obs["cell_state"].to_numpy()
+    z = a.obsm["X_latent"]
+    blur = z.copy()
+    blur[s == "S1"] += z[s == "S2"].mean(axis=0) - z[s == "S1"].mean(axis=0)
+    a.obsm["X_blur"] = blur.astype(np.float32)
+    return a

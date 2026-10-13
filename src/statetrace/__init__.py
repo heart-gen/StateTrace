@@ -45,6 +45,8 @@ __all__ = [
     "ExpressionConfig",
     "ExpressionSpace",
     "build_expression_space",
+    # two-sample engines (E-distance, scXMatch), reported next to the shift
+    "TwoSampleConfig",
     # outputs
     "state_abundance",
     "pseudobulk",
@@ -84,6 +86,7 @@ _lazy = {
     "ExpressionConfig": (".expression", "ExpressionConfig"),
     "ExpressionSpace": (".expression", "ExpressionSpace"),
     "build_expression_space": (".expression", "build_expression_space"),
+    "TwoSampleConfig": (".twosample", "TwoSampleConfig"),
     "state_abundance": (".aggregation", "state_abundance"),
     "pseudobulk": (".aggregation", "pseudobulk"),
     "harmonize_features": (".features", "harmonize_features"),
@@ -131,5 +134,6 @@ if TYPE_CHECKING:
     from .reference import Reference, StateReference
     from .robustness import BackendComparison, compare_backends
     from .transport import TransportConfig, TransportRoute, validate_transport
+    from .twosample import TwoSampleConfig
     from .utils import MetadataReport, resolve_latent, validate_metadata
     from .validation import LODOConfig, StabilityThresholds, ValidationResult, summarize_holdout

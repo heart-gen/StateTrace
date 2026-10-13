@@ -8,7 +8,7 @@ it is comparable to or better than the main comparators on the previous layer's 
 | Version | Content | Benchmark gate |
 |---|---|---|
 | 0.1 | `StateReference`, grouped holdout (donor, study), random-split control, reproducibility categories, frozen format, kNN baseline | G0 simulation parity |
-| 0.2 | `Predictions` adapters (scPoli, scANVI, Symphony, Azimuth, CellTypist), `validate_transport`, shift diagnostics, inference gating, `compare_backends`, abundance and pseudobulk, transport report, feature harmonisation | G1 semi-synthetic perturbations on real data |
+| 0.2 | `Predictions` adapters (scPoli, scANVI, Symphony, Azimuth, CellTypist), `validate_transport`, shift diagnostics, two-sample engines (E-distance; scXMatch when installed) reported next to the status, inference gating, `compare_backends`, abundance and pseudobulk, transport report, feature harmonisation | G1 semi-synthetic perturbations on real data |
 | 0.3 | scANVI `AnnDataBackend` with per-fold refit, group-aware calibration tables, downstream-validity helpers (type I error / replication summaries) | G2 public cross-cohort (PBMC, HLCA) |
 | 0.4 | hierarchical states, plotting, CLI | G3 brain and G4 application |
 | TBD (Stage 7) | StateTrace-Spatial: boundary stability and segmentation sensitivity; optional CellART output adapter | G6-Spatial (proposed; criteria to be registered) |
@@ -24,12 +24,18 @@ perturbation, not ground truth. See {doc}`spatial-roadmap` for the benchmark des
 evaluation, reference-sensitivity controls and implementation scope. Its schedule and version
 are unassigned; it is not a v1.0 release requirement.
 
-## Planned: cell-level frozen-expression displacement
+## Cell-level frozen-expression evidence
 
 The donor x state pseudobulk distance is the primary shift evidence because donors are the
-replication unit. Its planned complement applies the same frozen standardisation and PCA to
-single cells (with a null from held-out reference cells rather than donors), to locate a
-shifted subpopulation *within* a donor x state that the pseudobulk averages over. Together
+replication unit. Its cell-level complement now exists at the level of the state: a frozen
+cell-level space (reference cells only) in which the E-distance and scXMatch's cross-match test
+compare each reference state with its query cells, next to the same tests on donor profiles
+({mod}`statetrace.twosample`). They are reported, not decisive (see {doc}`concepts`). scXMatch
+(Moeller et al., *Bioinformatics* 2026) is the reference two-sample test for that question, so
+StateTrace orchestrates it rather than re-implementing it.
+
+Still planned: locating a shifted subpopulation *within* a donor x state that the pseudobulk
+averages over (per-cell displacement against a null from held-out reference cells). Together
 with mapping-space identity this separates: same identity and same molecular state; same
 identity and shifted molecular state; poor identity assignment; a truly out-of-reference
 population.

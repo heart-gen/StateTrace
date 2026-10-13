@@ -37,6 +37,7 @@ from . import novelty, schema
 from .aggregation import pseudobulk as _pseudobulk
 from .aggregation import state_abundance as _state_abundance
 from .predictions import Predictions
+from .twosample import TwoSampleConfig
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -49,6 +50,8 @@ logger = logging.getLogger(__name__)
 STATE_COLUMNS = (
     "ref_groups",
     "ref_reproducibility",
+    "ref_reproducibility_latent",
+    "ref_reproducibility_expression",
     "query_groups",
     "groups_observed",
     "groups_recovered",
@@ -81,6 +84,15 @@ STATE_COLUMNS = (
     "latent_shift_raw",
     "expression_shift_raw",
     "novel_population",
+    "caution_basis",
+    "ref_groups_observed",
+    "cmp_recovery_rate",
+    "ref_recovery_rate",
+    "recovery_p",
+    "cmp_uncertain_fraction",
+    "ref_uncertain_fraction",
+    "uncertain_p",
+    "caution_reasons",
     "query_recall",
     "status",
 )
@@ -122,9 +134,10 @@ class TransportConfig:
         it gives; ``"fixed"`` or a reference without calibration uses ``min_support`` for
         every state. ``min_support=None`` disables the rule.
     ood_score, ood_rule, ood_z, ood_quantile
-        Out-of-reference call. ``ood_score`` is the evidence: ``"centroid"`` (distance to the
-        state's reference centroid), ``"knn"`` (distance to the k-th nearest reference cell)
-        or ``"joint"`` (the larger of the two standardised distances). ``ood_rule="z"`` flags a
+        Out-of-reference call. ``ood_score`` is the evidence: ``"knn"`` (default; distance to
+        the k-th nearest reference cell), ``"centroid"`` (distance to the state's reference
+        centroid; the 0.1.0 default) or ``"joint"`` (the larger of the two standardised
+        distances). ``ood_rule="z"`` flags a
         cell whose standardised score exceeds ``ood_z``; ``"quantile"`` flags one whose score
         exceeds the ``ood_quantile`` (0.95 or 0.99) of the held-out reference cells of its
         state, which fixes the false rate on new donors at about the nominal level. The
@@ -142,7 +155,21 @@ class TransportConfig:
     min_groups_recovered
         Fewer recovering groups -> ``insufficient``.
     caution_recovery_rate, caution_uncertain_fraction
-        Below / above these -> ``supported_with_caution``.
+        Below / above these -> ``supported_with_caution`` (``caution_calibration="fixed"``,
+        and for any state the held-out comparison cannot judge).
+    caution_calibration, caution_alpha, caution_margin
+        ``"fixed"`` applies the two cut-offs above. ``"holdout"`` (default) asks instead
+        whether the query's groups do worse than held-out reference groups do. Both are
+        measured from StateTrace's own cell evidence in the mapper's latent (local support
+        standing in for confidence; the same out-of-reference rule, support thresholds and
+        recovery rule), never from the mapper's confidence, which exists only for the query
+        (``cmp_*`` and ``ref_*`` state columns). A state is cautioned for recovery when the query
+        recovers it in a lower share of observing groups (one-sided Fisher exact
+        ``p < caution_alpha``) by more than ``caution_margin``, and for uncertainty when the
+        per-group uncertain fractions are higher (one-sided Mann-Whitney ``p < caution_alpha``)
+        with a median more than ``caution_margin`` above. States with fewer than
+        ``min_groups_recovered`` observing held-out groups, or a route without held-out
+        evidence or a query latent, keep the fixed cut-offs (``caution_basis``).
     max_ood_fraction, shift_moderate, shift_high
         Out-of-reference fraction above ``max_ood_fraction`` or a shift at or above
         ``shift_high`` -> ``shifted``; between ``shift_moderate`` and ``shift_high`` -> caution.
@@ -175,6 +202,16 @@ class TransportConfig:
         exist); ``"in_sample"`` always uses the reference's own cells.
     require_reference_validation
         Treat an unvalidated reference state as ``moderate`` (caution) rather than ``stable``.
+    two_sample
+        A :class:`~statetrace.twosample.TwoSampleConfig` runs the two-sample engines
+        (E-distance, scXMatch) of every reference state against its assigned query cells and
+        donor profiles in the frozen space; the result is ``route.two_sample``. ``None``
+        (default) runs none. The engines are reported evidence: they never change
+        ``status``, which the predeclared rule above decides.
+    allow_group_overlap
+        The query must be independent of the reference: by default a query group (donor)
+        that is also a reference group raises. ``True`` is reserved for the explicit cell-level control (a random split that ignores
+        donors) and is recorded in ``route.reference["independence"]``.
     """
 
     min_cells_per_group: int = 20
@@ -186,7 +223,7 @@ class TransportConfig:
     support_neighbors: int = 15
     support_calibration: str = "holdout"
     support_quantile: float = 0.05
-    ood_score: str = "centroid"
+    ood_score: str = "knn"
     ood_rule: str = "z"
     ood_quantile: float = 0.99
     population_calibration: str = "holdout"
@@ -195,6 +232,9 @@ class TransportConfig:
     min_groups_recovered: int = 3
     caution_recovery_rate: float = 0.8
     caution_uncertain_fraction: float = 0.2
+    caution_calibration: str = "holdout"
+    caution_alpha: float = 0.05
+    caution_margin: float = 0.1
     max_ood_fraction: float = 0.3
     shift_moderate: float = 2.0
     shift_high: float = 4.0
@@ -205,6 +245,8 @@ class TransportConfig:
     novelty_calibration: str = "holdout"
     shift_source: str = "auto"
     expression_layer: str | None = None
+    two_sample: TwoSampleConfig | None = None
+    allow_group_overlap: bool = False
 
     def __post_init__(self) -> None:
         if self.shift_source not in ("auto", "expression", "latent"):
@@ -213,6 +255,12 @@ class TransportConfig:
             raise ValueError(f"ood_rule must be one of {novelty.OOD_RULES}")
         if self.ood_score not in novelty.OOD_SCORES:
             raise ValueError(f"ood_score must be one of {novelty.OOD_SCORES}")
+        if self.caution_calibration not in ("holdout", "fixed"):
+            raise ValueError("caution_calibration must be 'holdout' or 'fixed'")
+        if not 0 < self.caution_alpha < 1:
+            raise ValueError("caution_alpha must lie in (0, 1)")
+        if not 0 <= self.caution_margin < 1:
+            raise ValueError("caution_margin must lie in [0, 1)")
         if self.support_calibration not in ("holdout", "fixed"):
             raise ValueError("support_calibration must be 'holdout' or 'fixed'")
         if float(self.support_quantile) not in (0.05, 0.10):
@@ -229,6 +277,8 @@ class TransportConfig:
             raise ValueError("min_support must lie in [0, 1] or be None")
         if self.support_neighbors < 1:
             raise ValueError("support_neighbors must be >= 1")
+        if self.two_sample is not None and not isinstance(self.two_sample, TwoSampleConfig):
+            raise TypeError("two_sample must be a TwoSampleConfig or None")
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -239,15 +289,17 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     Rule-based status for one state, evaluated in order.
 
     1. ``absent``: too few supported query cells or no observing group.
-    2. ``insufficient``: the reference itself does not reproduce the state.
+    2. ``insufficient``: the reference itself does not reproduce the state (``ref_reproducibility``,
+       judged in the space ``LODOConfig.reproducibility_space`` chose).
     3. Displaced (high shift in the deciding coordinate system, or out-of-reference fraction
        above the maximum): if the cells that *do* lie within the reference distribution still
        recover the state in enough groups with low shift, an out-of-reference population sits
        next to an otherwise intact state -> ``supported_with_caution`` (``novel_population``);
        otherwise ``shifted``.
     4. ``insufficient``: too few query groups recover the state.
-    5. ``supported_with_caution`` on any caution trigger (including a tool that gives neither
-       confidence nor a latent to compute support from), else ``supported``.
+    5. ``supported_with_caution`` on any caution trigger (:func:`caution_reasons`, including
+       a tool that gives neither confidence nor a latent to compute support from), else
+       ``supported``.
     """
     n_supported = row.get("n_cells_supported", row["n_cells"])
     if n_supported < cfg.min_cells_total or row["groups_observed"] == 0:
@@ -255,29 +307,53 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     rep = row["ref_reproducibility"]
     if rep in ("fragile", "insufficient"):
         return "insufficient"
-    ood_thr = row.get("ood_threshold", cfg.max_ood_fraction)
-    ood_thr = cfg.max_ood_fraction if ood_thr is None or not np.isfinite(ood_thr) else ood_thr
-    displaced = row["shift_level"] == "high" or (
-        np.isfinite(row["ood_fraction"]) and row["ood_fraction"] > ood_thr
-    )
-    if displaced:
+    if _displaced(row, cfg):
         coherent = row["groups_recovered_in_reference"] >= cfg.min_groups_recovered and row[
             "shift_in_reference_level"
         ] in ("low", "moderate")
         return "supported_with_caution" if coherent else "shifted"
     if row["groups_recovered"] < cfg.min_groups_recovered:
         return "insufficient"
-    caution = (
-        rep in ("moderate", "unvalidated")
-        or row["recovery_rate"] < cfg.caution_recovery_rate
-        or (
+    return "supported_with_caution" if caution_reasons(row, cfg) else "supported"
+
+
+def _displaced(row: pd.Series | dict, cfg: TransportConfig) -> bool:
+    """High shift, or an out-of-reference fraction above the state's threshold."""
+    ood_thr = row.get("ood_threshold", cfg.max_ood_fraction)
+    ood_thr = cfg.max_ood_fraction if ood_thr is None or not np.isfinite(ood_thr) else ood_thr
+    return row["shift_level"] == "high" or bool(
+        np.isfinite(row["ood_fraction"]) and row["ood_fraction"] > ood_thr
+    )
+
+
+def caution_reasons(row: pd.Series | dict, cfg: TransportConfig) -> list[str]:
+    """
+    The caution triggers a state's evidence meets, in a fixed order: ``reproducibility``
+    (the reference reproduces it only moderately, or is unvalidated), ``recovery`` and
+    ``uncertainty`` (against the fixed cut-offs, or against held-out reference groups when
+    ``caution_basis`` is ``"holdout"``), ``shift`` (moderate) and ``no_confidence``.
+    """
+    reasons = []
+    if row["ref_reproducibility"] in ("moderate", "unvalidated"):
+        reasons.append("reproducibility")
+    if row.get("caution_basis", "fixed") == "holdout":
+        low_recovery = bool(row["recovery_worse"])
+        uncertain = bool(row["uncertain_worse"])
+    else:
+        low_recovery = row["recovery_rate"] < cfg.caution_recovery_rate
+        uncertain = bool(
             np.isfinite(row["uncertain_fraction"])
             and row["uncertain_fraction"] > cfg.caution_uncertain_fraction
         )
-        or row["shift_level"] == "moderate"
-        or row.get("confidence_source", "backend") == "none"
-    )
-    return "supported_with_caution" if caution else "supported"
+    if low_recovery:
+        reasons.append("recovery")
+    if uncertain:
+        reasons.append("uncertainty")
+    if row["shift_level"] == "moderate":
+        reasons.append("shift")
+    if row.get("confidence_source", "backend") == "none":
+        reasons.append("no_confidence")
+    return reasons
 
 
 @dataclass
@@ -301,6 +377,11 @@ class TransportRoute:
         (``None`` when the diagnostic did not run): ``group``, ``state``, ``n_cells``,
         ``distance``, ``distance_pc``, ``residual``, ``nearest``, ``genes_beyond``,
         ``shift_z``, ``shift_p`` and ``in_reference_only``.
+    two_sample
+        Two-sample tests of each reference state against its query cells and donor profiles
+        (``None`` unless ``TransportConfig.two_sample`` was set); see
+        :func:`statetrace.twosample.state_tests`. Reported evidence only: never an input to
+        ``status``.
     """
 
     group_key: str
@@ -314,6 +395,7 @@ class TransportRoute:
     statetrace_version: str
     query: Any = field(default=None, repr=False)
     expression: pd.DataFrame | None = field(default=None, repr=False)
+    two_sample: pd.DataFrame | None = field(default=None, repr=False)
 
     @property
     def supported_states(self) -> list[str]:
@@ -468,8 +550,11 @@ def _expression_shift(
     in_reference: np.ndarray,
     cfg: TransportConfig,
     feature_map: FeatureMap | None,
-) -> tuple[pd.DataFrame | None, dict[str, Any]]:
-    """Score query donor x state pseudobulks (all assigned cells, and in-reference cells only)."""
+) -> tuple[pd.DataFrame | None, dict[str, Any], pd.DataFrame | None, dict[str, Any] | None]:
+    """
+    Score query donor x state pseudobulks (all assigned cells, and in-reference cells only)
+    and, when ``cfg.two_sample`` is set, run the two-sample engines on the same genes.
+    """
     from .features import harmonize_features
 
     space = reference.expression_
@@ -483,7 +568,7 @@ def _expression_shift(
             UserWarning,
             stacklevel=3,
         )
-        return None, {"available": False, "feature_retention": 0.0}
+        return None, {"available": False, "feature_retention": 0.0}, None, None
     gene_pos = pd.Index(space.genes).get_indexer(mapping["reference"].to_numpy())
     order = np.argsort(gene_pos)
     gene_pos = gene_pos[order]
@@ -516,7 +601,61 @@ def _expression_shift(
     table = pd.concat([t for t, _ in tables], ignore_index=True)
     table["group"] = np.asarray(group_names).astype(str)[table["group"].to_numpy()]
     prov = {"available": True, **tables[0][1]}
-    return table, prov
+    two_table, two_prov = None, None
+    if cfg.two_sample is not None:
+        from .twosample import state_tests
+
+        two_table, two_prov = state_tests(
+            space,
+            X,
+            group_codes,
+            state_codes,
+            in_reference,
+            gene_index=gene_pos,
+            min_cells_per_group=cfg.min_cells_per_group,
+            correct_cohort_offset=cfg.correct_cohort_offset,
+            config=cfg.two_sample,
+        )
+    return table, prov, two_table, two_prov
+
+
+def _check_independence(
+    reference: StateReference, query: AnnData, group_key: str, cfg: TransportConfig
+) -> dict[str, Any]:
+    """
+    The query must not share a group (donor) with the reference that defined the states:
+    cells of one donor on both sides make every shift or two-sample test circular. Shared
+    cell names are only counted, because barcodes repeat across independent libraries.
+    """
+    q_groups = set(query.obs[group_key].astype(str))
+    shared_groups = sorted(q_groups & set(np.asarray(reference.groups_).astype(str)))
+    ref_cells = reference.obs_names_
+    shared_cells = (
+        int(np.isin(np.asarray(query.obs_names).astype(str), ref_cells).sum())
+        if ref_cells is not None
+        else 0
+    )
+    if shared_groups and not cfg.allow_group_overlap:
+        raise ValueError(
+            f"{len(shared_groups)} query groups are also reference groups (e.g. "
+            f"{shared_groups[:3]}): states must be defined without the query. Hold these "
+            "donors out of the reference (or rename coincidentally equal identifiers), or pass "
+            "TransportConfig(allow_group_overlap=True) for an explicit cell-level control."
+        )
+    if not reference.is_frozen:
+        warnings.warn(
+            "the reference is not frozen; freeze() it before reading the query so that no "
+            "query can influence the states it is tested against.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return {
+        "state_definition": "frozen_reference" if reference.is_frozen else "fitted_reference",
+        "query_in_state_definition": False,
+        "shared_groups": len(shared_groups),
+        "shared_cell_names": shared_cells,
+        "allow_group_overlap": bool(cfg.allow_group_overlap),
+    }
 
 
 def validate_transport(
@@ -567,6 +706,7 @@ def validate_transport(
         raise RuntimeError("fit() the reference before validating transport")
     if group_key not in query.obs:
         raise KeyError(f"query.obs[{group_key!r}] not found")
+    independence = _check_independence(reference, query, group_key, cfg)
     states = np.asarray(reference.states_).astype(str)
     pos = {s: i for i, s in enumerate(states)}
 
@@ -601,6 +741,7 @@ def validate_transport(
     cohort_offset = np.zeros(reference.latent_.shape[1], dtype=np.float32)
     support = preds.support.to_numpy(dtype=float) if preds.support is not None else None
     support_source = "backend" if support is not None else "none"
+    own_support: np.ndarray | None = None
     calibration = reference.distance_calibration_
     support_thr = novelty.support_thresholds(
         calibration if cfg.support_calibration == "holdout" else None,
@@ -747,6 +888,8 @@ def validate_transport(
     # frozen biological space: donor x state pseudobulk shift
     expr_table: pd.DataFrame | None = None
     expr_prov: dict[str, Any] = {"available": False}
+    two_table: pd.DataFrame | None = None
+    two_prov: dict[str, Any] | None = None
     expr_shift = np.full(len(states), np.nan)
     expr_shift_in = np.full(len(states), np.nan)
     expr_shift_raw = np.full(len(states), np.nan)
@@ -754,7 +897,7 @@ def validate_transport(
     groups_scored = np.zeros(len(states), dtype=int)
     want_expr = cfg.shift_source in ("auto", "expression")
     if want_expr and reference.expression_ is not None and query.n_vars > 0:
-        expr_table, expr_prov = _expression_shift(
+        expr_table, expr_prov, two_table, two_prov = _expression_shift(
             reference, query, group_codes_q, group_names_q, codes, in_ref, cfg, feature_map
         )
         if expr_table is not None:
@@ -770,7 +913,14 @@ def validate_transport(
                 high=cfg.shift_high,
             )
             expr_table["state"] = states[expr_table["state"].to_numpy()]
-    elif cfg.shift_source == "expression":
+    if cfg.two_sample is not None and two_prov is None:
+        warnings.warn(
+            "two_sample engines requested but the reference carries no expression space, the "
+            "query has none of its genes, or shift_source='latent'; route.two_sample is empty.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if cfg.shift_source == "expression" and (reference.expression_ is None or query.n_vars == 0):
         warnings.warn(
             "shift_source='expression' but the reference carries no expression space or the "
             "query has no genes; shift is unknown.",
@@ -945,13 +1095,61 @@ def validate_transport(
     )
     st["ref_groups"] = meta["n_groups"].fillna(0).astype(int) if meta is not None else 0
     if reference.validation_ is not None:
-        st["ref_reproducibility"] = (
-            reference.validation_.state_metrics["reproducibility"]
+        sm = reference.validation_.state_metrics
+        st["ref_reproducibility"] = sm["reproducibility"].reindex(states).fillna("insufficient")
+        st["ref_reproducibility_latent"] = (
+            sm.get("reproducibility_latent", sm["reproducibility"])
             .reindex(states)
             .fillna("insufficient")
         )
+        st["ref_reproducibility_expression"] = (
+            sm["reproducibility_expression"].reindex(states).fillna("insufficient")
+            if "reproducibility_expression" in sm
+            else None
+        )
+        reproducibility_space = reference.validation_.config.reproducibility_space
     else:
         st["ref_reproducibility"] = "unvalidated" if cfg.require_reference_validation else "stable"
+        st["ref_reproducibility_latent"] = st["ref_reproducibility"]
+        st["ref_reproducibility_expression"] = None
+        reproducibility_space = None
+    # caution: fixed cut-offs, or the query's groups against held-out reference groups
+    holdout_groups = query_cmp = None
+    if (
+        cfg.caution_calibration == "holdout"
+        and Z is not None
+        and ood_applied is not None
+        and reference.validation_ is not None
+    ):
+        cmp_kw = {
+            "support_thresholds": support_thr,
+            "uncertain_below": cfg.uncertain_below,
+            "min_confidence": cfg.min_confidence,
+            "min_cells": cfg.min_cells_per_group,
+            "max_ood_fraction": cfg.max_ood_fraction,
+        }
+        holdout_groups = novelty.holdout_group_table(
+            reference.validation_.holdout_evidence,
+            calibration,
+            states,
+            score=ood_applied["score"],
+            rule=ood_applied["rule"],
+            z=cfg.ood_z,
+            quantile=cfg.ood_quantile,
+            **cmp_kw,
+        )
+        query_cmp = novelty.group_evidence_table(
+            cells["group"].to_numpy(), codes, own_support, ood, states, **cmp_kw
+        )
+    ct = novelty.caution_against_holdout(
+        query_cmp,
+        holdout_groups,
+        states,
+        alpha=cfg.caution_alpha,
+        margin=cfg.caution_margin,
+        min_groups=cfg.min_groups_recovered,
+    )
+    st = st.join(ct)
     if query_state_key is not None:
         true = cells["true_state"].to_numpy()
         pred = cells["state"].to_numpy()
@@ -964,6 +1162,12 @@ def validate_transport(
     else:
         st["query_recall"] = np.nan
     st["status"] = [transport_status(row, cfg) for _, row in st.iterrows()]
+    st["caution_reasons"] = [
+        ";".join((["novel_population"] if _displaced(row, cfg) else []) + caution_reasons(row, cfg))
+        if status == "supported_with_caution"
+        else ""
+        for (_, row), status in zip(st.iterrows(), st["status"], strict=True)
+    ]
     st.index.name = "state"
     st = st[list(STATE_COLUMNS)]
     cells = cells.drop(columns="_supported_label")
@@ -981,6 +1185,7 @@ def validate_transport(
             "state_key": reference.state_key,
             "latent": dict(reference.latent_provenance_),
             "validated": reference.validation_ is not None,
+            "reproducibility_space": reproducibility_space,
             "latent_available": Z is not None,
             "novelty_calibration": (
                 "holdout"
@@ -988,6 +1193,13 @@ def validate_transport(
                 and cfg.novelty_calibration == "holdout"
                 and reference.distance_calibration_ is not None
                 else ("in_sample" if Z is not None else None)
+            ),
+            "novelty_calibration_unit": (
+                reference.validation_.config.calibration_unit
+                if Z is not None
+                and cfg.novelty_calibration == "holdout"
+                and reference.distance_calibration_ is not None
+                else None
             ),
             "confidence_source": confidence_source,
             "support": {
@@ -1004,6 +1216,8 @@ def validate_transport(
                 and "support_q05_holdout" in calibration
                 else "fixed"
             ),
+            "caution_calibration": "holdout" if holdout_groups is not None else "fixed",
+            "caution_states_holdout": int((st["caution_basis"] == "holdout").sum()),
             "population_calibration": (
                 "holdout"
                 if cfg.population_calibration == "holdout"
@@ -1022,11 +1236,14 @@ def validate_transport(
                 else None
             ),
             "expression": expr_prov,
+            "two_sample": two_prov,
+            "independence": independence,
         },
         created=datetime.now(UTC).isoformat(timespec="seconds"),
         statetrace_version=__version__,
         query=query if keep_query else None,
         expression=expr_table,
+        two_sample=two_table,
     )
     logger.info("transport: %s", route.summary().replace("\n", " | "))
     return route
@@ -1039,6 +1256,8 @@ def route_to_dir(route: TransportRoute, path: str | Path, *, include_cells: bool
     route.groups.to_csv(path / "groups.csv", index=False)
     if include_cells:
         route.cells.to_csv(path / "cells.csv.gz", index_label="cell")
+    if route.two_sample is not None:
+        route.two_sample.to_csv(path / "two_sample.csv", index=False)
     (path / "config.json").write_text(
         json.dumps(
             {

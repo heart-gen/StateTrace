@@ -25,9 +25,11 @@ refitted inside every holdout fold.
    an independent cohort?
 4. **Backend robustness**: do scPoli, scANVI, Symphony and the kNN baseline reach the same
    conclusion ({func}`~statetrace.compare_backends`)?
-5. **Distribution-shift diagnostics**: absent, novel, or a shifted version of an existing state.
-   Per cell, reference-distance z-scores in the mapping latent; per donor x state, pseudobulk
-   distance in the frozen expression space against held-out reference donors.
+5. **Shift and novelty diagnostics**: absent, novel, or a shifted version of an existing
+   state. Per donor x state, pseudobulk distance in the frozen expression space against
+   held-out reference donors (decides the status); per cell, reference-distance z-scores in the
+   mapping latent; optionally, two-sample tests (E-distance, scXMatch) of each state at cell
+   and donor level, reported next to the status (see below).
 6. **Inference gating**: `supported`, `supported_with_caution`, `shifted`, `insufficient` or
    `absent` per state; `route.pseudobulk(states="supported")` and
    `route.state_abundance(states="supported")` carry only gated states downstream.
@@ -44,6 +46,32 @@ in the query donors lie within the between-donor variation of state S in the ref
 null for that question comes from held-out reference donors, not from a theoretical cut-off.
 See {doc}`transport`.
 
+## Three layers of shift evidence, never conflated
+
+Whether two sets of profiles come from the same distribution is a two-sample question with
+dedicated, principled answers: the graph cross-match test of scXMatch (Moeller et al.,
+*Bioinformatics* 2026, [doi:10.1093/bioinformatics/btag706](https://doi.org/10.1093/bioinformatics/btag706))
+and the E-distance permutation test (Peidli et al., *Nature Methods* 2024). StateTrace does not
+claim that question. It runs those tests as optional engines
+({class}`~statetrace.TwoSampleConfig`, {mod}`statetrace.twosample`) and keeps three kinds of
+evidence apart:
+
+| Evidence | Unit | Answers | Role |
+|---|---|---|---|
+| Donor x state pseudobulk distance vs held-out reference donors | donor | is the state outside the reference's between-donor range? | decides `shift_level` and `status` |
+| Two-sample tests on donor profiles (E-distance, scXMatch) | donor | do the query donors' profiles of the state differ in distribution from held-out reference donors'? | reported |
+| Two-sample tests on cells (E-distance, scXMatch) | cell | do the query cells of the state differ in distribution from the reference cells, including in spread? | reported |
+| Reference-distance z-scores in the mapping latent | cell | is a cell outside the reference support (out of reference)? | cell category, `novel_population` |
+
+The cell-level tests are the most sensitive: they see a change in spread that a pseudobulk mean
+cannot. They also treat cells of one donor as independent, so a cohort of genuinely new,
+unshifted donors already differs from the reference's donors at cell level. A significant
+cell-level test is evidence that something differs, not that the state failed to transport;
+StateTrace's question is what the evidence together implies (a reproducible shifted state, an
+unsupported or novel population, or a state that should not enter downstream inference).
+scXMatch's authors name the adjacent question, whether the query was sampled from a subspace
+of the reference, as outside a two-sample test; that is the out-of-reference arm here.
+
 ## Abstention is a result
 
 `unknown` and `out_of_reference` are valid outcomes. Forcing every query cell into the nearest
@@ -56,9 +84,21 @@ out-of-reference cells per state and per donor and uses it in gating.
 coordinates, labels, group statistics, state geometry, the expression space and validation
 tables. A query is evaluated against that bundle and never redefines it.
 
+States are therefore defined independently of every test run on the query. A two-sample test
+of clusters inferred from the same data it compares is double dipping and will almost always
+find a difference (as scXMatch's authors warn); StateTrace's tests compare a frozen reference
+state with the query cells a mapper assigned to it, and the features, scaling and projections
+come from the reference alone. {func}`~statetrace.validate_transport` refuses a query that
+shares a group (donor) with the reference, warns when the reference is not frozen, and records
+both in `route.reference["independence"]`; `TransportConfig(allow_group_overlap=True)` is
+reserved for the explicit cell-level control. Mapper assignment can only pull query cells
+towards the reference (absorption), which makes the tests conservative, not circular.
+
 ## What StateTrace is not
 
 Not an integration method, not a classifier competing with scPoli or scANVI, not a
-differential-expression method, and not a conformal calibrator (scConform and conformal
-annotation already provide cell-level coverage guarantees). Its calibration question is
+differential-expression method, not a conformal calibrator (scConform and conformal annotation
+already provide cell-level coverage guarantees), and not a distribution-shift test (scXMatch and
+the E-distance answer *whether* two distributions differ; StateTrace asks what that implies for
+transporting the state). Its calibration question is
 group-aware: does a backend's confidence predict recovery in an unseen donor?

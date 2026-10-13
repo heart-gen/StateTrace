@@ -32,6 +32,40 @@ def _md_table(df: pd.DataFrame, *, index_name: str = "state", floatfmt: str = ".
     return "\n".join(lines)
 
 
+def _two_sample_section(route: TransportRoute) -> list[str]:
+    """Markdown for the two-sample engines (empty when they did not run)."""
+    t = route.two_sample
+    if t is None or len(t) == 0:
+        return []
+    ok = t[(t["status"] == "ok") & (t["subset"] == "all")]
+    wide = (
+        ok.assign(column=ok["engine"] + " " + ok["level"] + " p")
+        .pivot_table(index="state", columns="column", values="p_value", aggfunc="first")
+        .reindex(route.states.index)
+    )
+    not_ok = t.loc[t["status"] != "ok", ["engine", "level", "status"]].value_counts()
+    lines = [
+        "## Two-sample engines (reported, not decisive)",
+        "",
+        "Whether each reference state and the query cells assigned to it come from the same "
+        "distribution, by E-distance and/or scXMatch, at cell level (sampled cells in the "
+        "frozen cell space) and at donor level (donor x state pseudobulk profiles). These "
+        "p-values are evidence of *a* difference; they do not decide `status`, and a cell-level "
+        "p-value treats cells of one donor as independent. Full table: `two_sample.csv`.",
+        "",
+        _md_table(wide, floatfmt=".3g"),
+        "",
+    ]
+    if len(not_ok):
+        lines += [
+            "Rows not run: "
+            + "; ".join(f"{e}/{lv}: {st} x{n}" for (e, lv, st), n in not_ok.items())
+            + ".",
+            "",
+        ]
+    return lines
+
+
 def write_report(
     route: TransportRoute, output_dir: str | Path, *, include_cells: bool = True
 ) -> Path:
@@ -56,6 +90,7 @@ def write_report(
             "groups_shifted",
             "novel_population",
             "status",
+            "caution_reasons",
         ]
     ].copy()
     show["groups_recovered"] = (
@@ -150,6 +185,7 @@ def write_report(
             else " when the reference carries one; this reference does not, so shift falls back to the mapping latent."
         ),
         "",
+        *_two_sample_section(route),
         "## Rules",
         "",
         "```",
