@@ -97,6 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Positioning: StateTrace orchestrates shift evidence and is not a distribution-shift test
   (README, concepts, transport guide, roadmaps).
 
+### Fixed
+- Python 3.11: `isinstance(backend, MappingBackend)` raised on an unfitted `KNNBackend`,
+  because 3.11 checks protocol members with `hasattr`, which runs the `classes_` property.
+  The backend protocols now look members up statically on 3.11, as 3.12 does.
+
 ### Planned
 - Stage 7 StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
   benchmark design and optional CellART adapter; roadmap only, schedule and version unassigned.

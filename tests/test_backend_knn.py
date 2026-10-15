@@ -24,6 +24,28 @@ def test_protocol_conformance():
     assert b.name == "knn"
 
 
+def test_protocol_check_does_not_evaluate_properties():
+    # Python 3.11's isinstance ran properties; an unfitted backend's classes_ raises
+    class Unfitted(KNNBackend):
+        @property
+        def classes_(self):
+            raise RuntimeError("not fitted")
+
+    class NoClasses:
+        name = "none"
+
+        def fit(self, X, y): ...
+
+        def predict_proba(self, X): ...
+
+        def get_params(self): ...
+
+        def clone(self): ...
+
+    assert isinstance(Unfitted(), MappingBackend)
+    assert not isinstance(NoClasses(), MappingBackend)
+
+
 def test_registry():
     assert set(BACKENDS) >= {"knn", "scanvi"}
     assert get_backend("knn", n_neighbors=7).n_neighbors == 7
