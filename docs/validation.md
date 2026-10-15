@@ -72,7 +72,8 @@ its own holdout loop, {func}`~statetrace.summarize_holdout` builds the same
 With the kNN backend that probability is a neighbour vote fraction, so it flags ambiguous cells
 between two known states well but out-of-reference cells poorly: a novel state that lies in
 empty latent space still gets a unanimous vote from its nearest known state. Use it to explore
-ambiguity; rely on the v0.2 novelty statistics for out-of-reference detection.
+ambiguity; rely on the novelty statistics of {func}`~statetrace.validate_transport`
+({doc}`transport`) for out-of-reference detection.
 
 ### Distance calibration
 
@@ -91,13 +92,13 @@ same held-out donors are the null for the caution triggers in transport.
 
 ## Random split
 
-{meth}`~statetrace.AtlasReference.random_split` runs a stratified K-fold over cells,
+{meth}`~statetrace.Reference.random_split` runs a stratified K-fold over cells,
 ignoring groups. Its accuracy is the conventional, optimistic estimate; StateTrace
 reports it so the donor effect is visible as a gap rather than hidden.
 
-## Known optimism of v0.1
+## Known optimism of a fixed latent
 
 With the built-in kNN the latent space (scVI, PCA, ...) was fitted with the held-out group present. Grouped holdout therefore measures classifier transfer within a fixed embedding, an upper bound on
 what a truly unseen donor would achieve. `LODOConfig.refit_latent=True` is reserved for
-backends that can refit the embedding per fold (planned scVI backend) and raises
-`NotImplementedError` in v0.1. Every result records `latent["refit_latent"] = False`.
+backends that can refit the embedding per fold (the planned scANVI backend) and raises
+`NotImplementedError` until one exists. Every result records `latent["refit_latent"] = False`.

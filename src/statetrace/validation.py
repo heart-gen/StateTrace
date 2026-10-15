@@ -130,10 +130,15 @@ class LODOConfig:
             )
 
     def to_dict(self) -> dict[str, Any]:
+        """The configuration as a JSON-serialisable dict (inverse of :meth:`from_dict`)."""
         return dataclasses.asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> LODOConfig:
+        """
+        Build a configuration from :meth:`to_dict` output; ``thresholds`` becomes a
+        :class:`StabilityThresholds`.
+        """
         d = dict(d)
         thr = d.pop("thresholds", {})
         return cls(thresholds=StabilityThresholds(**thr), **d)
@@ -182,13 +187,24 @@ class ValidationResult:
     # donor-flavoured aliases for the common case
     @property
     def donor_metrics(self) -> pd.DataFrame:
+        """Alias of :attr:`group_metrics` when the group key is a donor key."""
         return self.group_metrics
 
     @property
     def donor_summary(self) -> pd.DataFrame:
+        """Alias of :attr:`group_summary` when the group key is a donor key."""
         return self.group_summary
 
     def summary(self) -> str:
+        """
+        A short text summary: overall accuracy, balanced accuracy, macro F1 and abstention,
+        the median per-group balanced accuracy, and the number of states per reproducibility
+        category.
+
+        Returns
+        -------
+        str
+        """
         o = self.overall
         counts = (
             self.state_metrics["reproducibility"]
@@ -234,6 +250,21 @@ class ValidationResult:
         }
 
     def to_dir(self, path: str | Path, *, include_cell_predictions: bool = True) -> Path:
+        """
+        Write the result as plain files (JSON and CSV, no pickle) that :meth:`from_dir` reads back.
+
+        Parameters
+        ----------
+        path
+            Directory to write; created if missing.
+        include_cell_predictions
+            Also write ``cell_predictions.csv.gz`` (the largest file).
+
+        Returns
+        -------
+        Path
+            ``path``.
+        """
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         (path / "config.json").write_text(
@@ -270,6 +301,19 @@ class ValidationResult:
 
     @classmethod
     def from_dir(cls, path: str | Path) -> ValidationResult:
+        """
+        Read a result written by :meth:`to_dir`.
+
+        Parameters
+        ----------
+        path
+            Directory written by :meth:`to_dir`.
+
+        Returns
+        -------
+        ValidationResult
+            Without cell predictions if they were not written.
+        """
         path = Path(path)
         meta = json.loads((path / "config.json").read_text())
         overall = json.loads((path / "overall.json").read_text())

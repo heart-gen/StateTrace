@@ -30,6 +30,14 @@ class BackendComparison:
     labels: pd.DataFrame
 
     def summary(self) -> str:
+        """
+        A short text summary: the backends, all-backend cell agreement, per-state concordance
+        and, when transport routes were compared, the status agreement.
+
+        Returns
+        -------
+        str
+        """
         lines = [
             f"backends: {', '.join(self.backends)}",
             f"  all-backend cell agreement {self.cell_agreement:.3f}",

@@ -58,16 +58,25 @@ class MappingBackend(Protocol, metaclass=_ProtocolMeta):
 
     name: str
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> MappingBackend: ...
+    def fit(self, X: np.ndarray, y: np.ndarray) -> MappingBackend:
+        """
+        Fit on latent coordinates ``X`` (cells x dimensions) and state labels ``y``; returns ``self``.
+        """
 
-    def predict_proba(self, X: np.ndarray) -> np.ndarray: ...
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """
+        Probabilities (cells x states), columns in the order of :attr:`classes_`, rows summing to one.
+        """
 
     @property
-    def classes_(self) -> np.ndarray: ...
+    def classes_(self) -> np.ndarray:
+        """The state labels, in column order of :meth:`predict_proba`."""
 
-    def get_params(self) -> dict[str, Any]: ...
+    def get_params(self) -> dict[str, Any]:
+        """The backend's parameters as a JSON-serialisable dict (recorded as provenance)."""
 
-    def clone(self) -> MappingBackend: ...
+    def clone(self) -> MappingBackend:
+        """An unfitted copy with the same parameters (one per validation fold)."""
 
 
 @runtime_checkable
@@ -88,13 +97,19 @@ class AnnDataBackend(Protocol, metaclass=_ProtocolMeta):
 
     name: str
 
-    def fit(self, adata: AnnData, *, state_key: str) -> AnnDataBackend: ...
+    def fit(self, adata: AnnData, *, state_key: str) -> AnnDataBackend:
+        """
+        Train on ``adata`` with the state labels in ``adata.obs[state_key]``; returns ``self``.
+        """
 
-    def predict(self, adata: AnnData) -> Predictions: ...
+    def predict(self, adata: AnnData) -> Predictions:
+        """Map the cells of ``adata`` and return :class:`~statetrace.predictions.Predictions`."""
 
-    def get_params(self) -> dict[str, Any]: ...
+    def get_params(self) -> dict[str, Any]:
+        """The backend's parameters as a JSON-serialisable dict (recorded as provenance)."""
 
-    def clone(self) -> AnnDataBackend: ...
+    def clone(self) -> AnnDataBackend:
+        """An unfitted copy with the same parameters (one per validation fold)."""
 
 
 class CallableBackend:
@@ -111,11 +126,21 @@ class CallableBackend:
         self._state_key: str | None = None
 
     def fit(self, adata: AnnData, *, state_key: str) -> CallableBackend:
+        """Keep the training AnnData and state key for :meth:`predict`; returns ``self``."""
         self._train = adata
         self._state_key = state_key
         return self
 
     def predict(self, adata: AnnData) -> Predictions:
+        """
+        Call ``fn(train_adata, adata, state_key, **params)``; predictions labelled ``custom`` take
+        this backend's name.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`fit` has not been called.
+        """
         if self._train is None:
             raise RuntimeError("call fit() first")
         p = self.fn(self._train, adata, self._state_key, **self.params)
@@ -124,7 +149,9 @@ class CallableBackend:
         return p
 
     def get_params(self) -> dict[str, Any]:
+        """``name`` and the extra keyword parameters passed to ``fn``."""
         return {"name": self.name, **self.params}
 
     def clone(self) -> CallableBackend:
+        """A new wrapper around the same function and parameters."""
         return CallableBackend(self.fn, name=self.name, **self.params)

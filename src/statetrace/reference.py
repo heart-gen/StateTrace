@@ -144,18 +144,25 @@ class StateReference:
     # ------------------------------------------------------------------ state
     @property
     def donor_key(self) -> str:
+        """Alias of :attr:`group_key` (the replication unit, usually donors)."""
         return self.group_key
 
     @property
     def donors_(self) -> np.ndarray | None:
+        """Alias of ``groups_``: the reference's group labels, ``None`` before :meth:`fit`."""
         return self.groups_
 
     @property
     def is_fitted(self) -> bool:
+        """Whether :meth:`fit` has run (a backend and a latent space are set)."""
         return self.backend_ is not None and self.latent_ is not None
 
     @property
     def uses_anndata_backend(self) -> bool:
+        """
+        Whether the backend is an :class:`~statetrace.backends.base.AnnDataBackend` (refits on
+        the AnnData per fold) rather than an array :class:`~statetrace.backends.base.MappingBackend`.
+        """
         return isinstance(self._backend_template, AnnDataBackend) and not isinstance(
             self._backend_template, MappingBackend
         )

@@ -31,13 +31,22 @@ class FeatureMap:
 
     @property
     def n_retained(self) -> int:
+        """Number of reference features mapped to a query feature."""
         return len(self.mapping)
 
     @property
     def retention(self) -> float:
+        """Fraction of reference features retained (NaN for an empty reference)."""
         return self.n_retained / self.n_reference if self.n_reference else float("nan")
 
     def summary(self) -> str:
+        """
+        A one-line summary of retained, unmapped and ambiguous features.
+
+        Returns
+        -------
+        str
+        """
         return (
             f"{self.n_retained}/{self.n_reference} reference features retained ({self.retention:.1%}); "
             f"{len(self.unmapped_reference)} reference and {len(self.unmapped_query)} query features unmapped; "

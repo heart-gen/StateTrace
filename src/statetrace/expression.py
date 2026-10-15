@@ -109,6 +109,7 @@ class ExpressionConfig:
     n_jobs: int = 1
 
     def to_dict(self) -> dict[str, Any]:
+        """The configuration as a JSON-serialisable dict (stored with the frozen reference)."""
         import dataclasses
 
         return dataclasses.asdict(self)
@@ -173,13 +174,23 @@ class ExpressionSpace:
 
     @property
     def n_genes(self) -> int:
+        """Number of genes in the frozen expression space."""
         return int(len(self.genes))
 
     @property
     def n_components(self) -> int:
+        """Number of principal components of the donor x state profile space."""
         return int(self.components.shape[0])
 
     def summary(self) -> str:
+        """
+        A one-line summary: genes, reference donor x state profiles, components and the states
+        with a held-out null.
+
+        Returns
+        -------
+        str
+        """
         ok = int(np.isfinite(self.null_stats["sd"]).sum())
         return (
             f"expression space: {self.n_genes} genes, {len(self.rows)} reference donor x state "

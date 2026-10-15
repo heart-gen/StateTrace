@@ -64,6 +64,20 @@ class KNNBackend:
 
     # ------------------------------------------------------------- MappingBackend
     def fit(self, X: np.ndarray, y: np.ndarray) -> KNNBackend:
+        """
+        Fit the neighbour index on ``X`` (cells x dimensions; rows L2-normalised for
+        ``metric='cosine'``) and labels ``y``; ``n_neighbors`` is capped at the number of cells.
+
+        Returns
+        -------
+        KNNBackend
+            ``self``.
+
+        Raises
+        ------
+        ValueError
+            If ``y`` is empty.
+        """
         from sklearn.neighbors import KNeighborsClassifier
 
         y = np.asarray(y)
@@ -80,10 +94,14 @@ class KNNBackend:
 
     @property
     def classes_(self) -> np.ndarray:
+        """The sorted state labels, in column order of :meth:`predict_proba`."""
         self._check_fitted()
         return self._classes
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """
+        Neighbour-vote probabilities (cells x states), columns in the order of :attr:`classes_`.
+        """
         self._check_fitted()
         return np.asarray(self._model.predict_proba(self._prep(X)), dtype=np.float64)
 
@@ -126,6 +144,7 @@ class KNNBackend:
         return np.bincount(flat, minlength=n * c).reshape(n, c).astype(np.int32)
 
     def get_params(self) -> dict[str, Any]:
+        """``n_neighbors``, ``metric``, ``weights`` and ``n_jobs``."""
         return {
             "n_neighbors": int(self.n_neighbors),
             "metric": self.metric,
@@ -134,4 +153,5 @@ class KNNBackend:
         }
 
     def clone(self) -> KNNBackend:
+        """An unfitted copy with the same parameters."""
         return KNNBackend(**self.get_params())
