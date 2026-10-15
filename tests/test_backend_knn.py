@@ -24,6 +24,28 @@ def test_protocol_conformance():
     assert b.name == "knn"
 
 
+def test_protocol_check_does_not_evaluate_properties():
+    # Python 3.11's isinstance ran properties; an unfitted backend's classes_ raises
+    class Unfitted(KNNBackend):
+        @property
+        def classes_(self):
+            raise RuntimeError("not fitted")
+
+    class NoClasses:
+        name = "none"
+
+        def fit(self, X, y): ...
+
+        def predict_proba(self, X): ...
+
+        def get_params(self): ...
+
+        def clone(self): ...
+
+    assert isinstance(Unfitted(), MappingBackend)
+    assert not isinstance(NoClasses(), MappingBackend)
+
+
 def test_registry():
     assert set(BACKENDS) >= {"knn", "scanvi"}
     assert get_backend("knn", n_neighbors=7).n_neighbors == 7
@@ -45,6 +67,16 @@ def test_neighbor_votes_sum_to_k(toy):
     X, y = toy
     V = KNNBackend(n_neighbors=9).fit(X, y).neighbor_votes(X)
     assert V.shape == (120, 3) and (V.sum(axis=1) == 9).all() and V.dtype.kind == "i"
+
+
+@pytest.mark.parametrize("weights", ["uniform", "distance"])
+def test_predict_proba_votes_matches_the_separate_calls(toy, weights):
+    X, y = toy
+    b = KNNBackend(n_neighbors=7, weights=weights).fit(X, y)
+    P, V = b.predict_proba_votes(X[::3])
+    np.testing.assert_array_equal(P, b.predict_proba(X[::3]))
+    np.testing.assert_array_equal(V, b.neighbor_votes(X[::3]))
+    assert P.dtype == np.float64 and V.dtype == np.int32
 
 
 def test_cosine_matches_brute_force_ranking(toy):

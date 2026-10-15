@@ -38,6 +38,7 @@ class KNNBackend:
     name: ClassVar[str] = "knn"
 
     _model: Any = field(default=None, init=False, repr=False, compare=False)
+    _classes: np.ndarray | None = field(default=None, init=False, repr=False, compare=False)
     _y_codes: np.ndarray | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -69,20 +70,35 @@ class KNNBackend:
         if len(y) == 0:
             raise ValueError("cannot fit on an empty training set")
         k = int(min(self.n_neighbors, len(y)))
+        # fit on integer codes: one pass over the labels (they are often strings) instead of
+        # scikit-learn's own unique plus a lookup; classes_ keeps the sorted labels
+        self._classes, self._y_codes = np.unique(y, return_inverse=True)
         self._model = KNeighborsClassifier(
             n_neighbors=k, weights=self.weights, metric="euclidean", n_jobs=self.n_jobs
-        ).fit(self._prep(X), y)
-        self._y_codes = np.searchsorted(self._model.classes_, y)
+        ).fit(self._prep(X), self._y_codes)
         return self
 
     @property
     def classes_(self) -> np.ndarray:
         self._check_fitted()
-        return self._model.classes_
+        return self._classes
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         self._check_fitted()
         return np.asarray(self._model.predict_proba(self._prep(X)), dtype=np.float64)
+
+    def predict_proba_votes(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        :meth:`predict_proba` and :meth:`neighbor_votes` from one neighbour search. With
+        uniform weights the probabilities are the vote fractions; distance weights fall back
+        to scikit-learn's weighting.
+        """
+        self._check_fitted()
+        if self.weights != "uniform":
+            return self.predict_proba(X), self.neighbor_votes(X)
+        _, idx = self.kneighbors(X)
+        votes = self._votes(idx)
+        return votes / votes.sum(axis=1, keepdims=True).astype(np.float64), votes
 
     def kneighbors(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -102,12 +118,12 @@ class KNNBackend:
     def neighbor_votes(self, X: np.ndarray) -> np.ndarray:
         """Integer count of the k nearest training cells per class, shape (n, n_classes)."""
         self._check_fitted()
-        _, idx = self.kneighbors(X)
-        votes = np.zeros((idx.shape[0], len(self.classes_)), dtype=np.int32)
-        rows = np.arange(idx.shape[0])
-        for j in range(idx.shape[1]):
-            np.add.at(votes, (rows, self._y_codes[idx[:, j]]), 1)
-        return votes
+        return self._votes(self.kneighbors(X)[1])
+
+    def _votes(self, idx: np.ndarray) -> np.ndarray:
+        n, c = idx.shape[0], len(self.classes_)
+        flat = (np.arange(n)[:, None] * c + self._y_codes[idx]).ravel()
+        return np.bincount(flat, minlength=n * c).reshape(n, c).astype(np.int32)
 
     def get_params(self) -> dict[str, Any]:
         return {

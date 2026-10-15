@@ -9,6 +9,8 @@ hook through which external mappers take part in grouped validation.
 
 from __future__ import annotations
 
+import inspect
+import sys
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -18,9 +20,35 @@ if TYPE_CHECKING:
 
     from ..predictions import Predictions
 
+if sys.version_info >= (3, 12):
+    _ProtocolMeta = type(Protocol)
+else:
+    import typing
+
+    class _ProtocolMeta(type(Protocol)):
+        """
+        Python 3.12's ``isinstance`` for the backend protocols on 3.11: members are looked up
+        with ``inspect.getattr_static``. 3.11 calls ``hasattr``, which evaluates a property such
+        as ``classes_`` and raises on an unfitted backend instead of answering.
+        """
+
+        def __instancecheck__(cls, instance: Any) -> bool:
+            if not getattr(cls, "_is_protocol", False):
+                return super().__instancecheck__(instance)
+            if cls in type(instance).__mro__:
+                return True
+            for attr in typing._get_protocol_attrs(cls):
+                try:
+                    value = inspect.getattr_static(instance, attr)
+                except AttributeError:
+                    return False
+                if value is None and callable(getattr(cls, attr, None)):
+                    return False
+            return True
+
 
 @runtime_checkable
-class MappingBackend(Protocol):
+class MappingBackend(Protocol, metaclass=_ProtocolMeta):
     """
     A classifier over a fixed latent space.
 
@@ -43,14 +71,14 @@ class MappingBackend(Protocol):
 
 
 @runtime_checkable
-class SupportsNeighborSupport(Protocol):
+class SupportsNeighborSupport(Protocol, metaclass=_ProtocolMeta):
     """Backends that can report how many reference neighbours voted for each class."""
 
     def neighbor_votes(self, X: np.ndarray) -> np.ndarray: ...
 
 
 @runtime_checkable
-class AnnDataBackend(Protocol):
+class AnnDataBackend(Protocol, metaclass=_ProtocolMeta):
     """
     A mapper that trains on an AnnData with state labels and predicts another AnnData.
 

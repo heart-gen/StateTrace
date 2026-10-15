@@ -87,6 +87,10 @@ class ExpressionConfig:
         projected onto ``cell_components`` principal components fitted on those reference
         cells only. Only the projected coordinates, the gene-wise centre and scale and the
         loadings are frozen; ``cell_sample_per_state=0`` disables the cell-level space.
+    n_jobs
+        Worker processes over the held-out donors of :func:`holdout_null` (``-1`` uses every
+        core), each with single-threaded native libraries. Execution only: the space does not
+        depend on it.
     """
 
     layer: str | None = None
@@ -102,6 +106,7 @@ class ExpressionConfig:
     cell_sample_per_state: int = 500
     cell_components: int = 50
     cell_seed: int = 0
+    n_jobs: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         import dataclasses
@@ -280,7 +285,16 @@ def _pca(Z: np.ndarray, n_components: int) -> np.ndarray:
     if Z.shape[0] < 2:
         return np.zeros((0, Z.shape[1]))
     Zc = Z - Z.mean(axis=0)
-    _, _, vt = np.linalg.svd(Zc, full_matrices=False)
+    try:
+        _, _, vt = np.linalg.svd(Zc, full_matrices=False)
+    except np.linalg.LinAlgError:
+        # LAPACK's divide-and-conquer driver (gesdd) can fail to converge on a matrix that the
+        # QR-iteration driver (gesvd) handles; which matrices fail depends on the BLAS kernels
+        # of the CPU, so the same reference can fail on one node and not on another
+        from scipy.linalg import svd
+
+        logger.warning("SVD (gesdd) did not converge on %s; retrying with gesvd", Zc.shape)
+        _, _, vt = svd(Zc, full_matrices=False, lapack_driver="gesvd")
     k = int(min(n_components, Z.shape[0] - 1, Z.shape[1]))
     return vt[:k]
 
@@ -371,6 +385,42 @@ def remove_group_offsets(
     return Z, cohort_offset, applied
 
 
+def _holdout_donor(
+    profiles: np.ndarray, rows: pd.DataFrame, d: int, n_states: int, cfg: ExpressionConfig
+) -> tuple[pd.DataFrame, np.ndarray] | None:
+    """Donor ``d``'s profiles scored against a space rebuilt without it (see :func:`holdout_null`)."""
+    held = rows["group"].to_numpy() == d
+    fit = _fit(profiles[~held], rows[~held].reset_index(drop=True), n_states, cfg)
+    sub = rows[held].reset_index(drop=True)
+    st = sub["state"].to_numpy()
+    Z = (profiles[held] - fit["mu"][st]) / fit["sigma"][st]
+    ok = np.isfinite(Z).all(axis=1)
+    if not ok.any():
+        return None
+    Z, st, sub = Z[ok], st[ok], sub[ok].reset_index(drop=True)
+    ref_Z, ref_st = fit["Z"], fit["rows"]["state"].to_numpy()
+    if cfg.group_offset:
+        # the held-out donor is centred on itself; a single donor has no cohort fallback
+        Z, _, _ = remove_group_offsets(
+            Z, np.zeros(len(st), dtype=int), min_states=cfg.offset_min_states
+        )
+        ref_Z, _, _ = remove_group_offsets(
+            ref_Z, fit["rows"]["group"].to_numpy(), min_states=cfg.offset_min_states
+        )
+    m = score_profiles(
+        Z,
+        st,
+        components=fit["components"],
+        reference_Z=ref_Z,
+        reference_states=ref_st,
+        beyond_z=cfg.beyond_z,
+    )
+    m.insert(0, "n_cells", sub["n_cells"].to_numpy())
+    m.insert(0, "state", st)
+    m.insert(0, "group", int(d))
+    return m, Z
+
+
 def holdout_null(
     profiles: np.ndarray,
     rows: pd.DataFrame,
@@ -386,40 +436,17 @@ def holdout_null(
     exactly as for scoring), aligned with the rows of the table: reference donors seen the
     way a query donor is seen, the reference side of the donor-level two-sample tests.
     """
-    records = []
-    held_Z: list[np.ndarray] = []
-    for d in np.unique(rows["group"].to_numpy()):
-        held = rows["group"].to_numpy() == d
-        fit = _fit(profiles[~held], rows[~held].reset_index(drop=True), n_states, cfg)
-        sub = rows[held].reset_index(drop=True)
-        st = sub["state"].to_numpy()
-        Z = (profiles[held] - fit["mu"][st]) / fit["sigma"][st]
-        ok = np.isfinite(Z).all(axis=1)
-        if not ok.any():
-            continue
-        Z, st, sub = Z[ok], st[ok], sub[ok].reset_index(drop=True)
-        ref_Z, ref_st = fit["Z"], fit["rows"]["state"].to_numpy()
-        if cfg.group_offset:
-            # the held-out donor is centred on itself; a single donor has no cohort fallback
-            Z, _, _ = remove_group_offsets(
-                Z, np.zeros(len(st), dtype=int), min_states=cfg.offset_min_states
-            )
-            ref_Z, _, _ = remove_group_offsets(
-                ref_Z, fit["rows"]["group"].to_numpy(), min_states=cfg.offset_min_states
-            )
-        m = score_profiles(
-            Z,
-            st,
-            components=fit["components"],
-            reference_Z=ref_Z,
-            reference_states=ref_st,
-            beyond_z=cfg.beyond_z,
+    donors = np.unique(rows["group"].to_numpy())
+    if cfg.n_jobs and cfg.n_jobs != 1:
+        from joblib import Parallel, delayed
+
+        scored = Parallel(n_jobs=cfg.n_jobs)(
+            delayed(_holdout_donor)(profiles, rows, d, n_states, cfg) for d in donors
         )
-        m.insert(0, "n_cells", sub["n_cells"].to_numpy())
-        m.insert(0, "state", st)
-        m.insert(0, "group", int(d))
-        records.append(m)
-        held_Z.append(Z)
+    else:
+        scored = [_holdout_donor(profiles, rows, d, n_states, cfg) for d in donors]
+    records = [m for m, _ in filter(None, scored)]
+    held_Z = [Z for _, Z in filter(None, scored)]
     if not records:
         empty = pd.DataFrame(columns=list(NULL_COLUMNS))
         return (empty, np.zeros((0, profiles.shape[1]))) if return_profiles else empty

@@ -317,3 +317,25 @@ def test_auto_options_resolve_to_what_the_reference_supports():
     res2 = two.leave_one_group_out(reproducibility_space="latent")
     assert res2.config.calibration_unit == "study"
     assert res2.config.reproducibility_space == "latent"
+
+
+def test_results_do_not_depend_on_n_jobs():
+    a = blurred_reference()
+    donors = sorted(a.obs["donor_id"].astype(str).unique())
+    a.obs["study"] = pd.Categorical(
+        np.where(a.obs["donor_id"].astype(str).isin(donors[: len(donors) // 2]), "A", "B")
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(a, **REF_KW, study_key="study").fit()
+    serial = ref.leave_one_group_out(n_jobs=1)
+    parallel = ref.leave_one_group_out(n_jobs=2)
+    assert serial.config.calibration_unit == "study"
+    assert serial.config.reproducibility_space == "expression"
+    pd.testing.assert_frame_equal(serial.cell_predictions, parallel.cell_predictions)
+    pd.testing.assert_frame_equal(serial.holdout_evidence, parallel.holdout_evidence)
+    pd.testing.assert_frame_equal(serial.distance_calibration, parallel.distance_calibration)
+    pd.testing.assert_frame_equal(serial.state_metrics, parallel.state_metrics)
+    pd.testing.assert_frame_equal(
+        ref.random_split(n_jobs=1).cell_predictions, ref.random_split(n_jobs=2).cell_predictions
+    )
