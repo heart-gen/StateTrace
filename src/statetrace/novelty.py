@@ -283,29 +283,10 @@ def holdout_evidence(
     """
     states = np.asarray(states).astype(str)
     labels = states[state_codes]
-    n_states = len(states)
-    group_labels = np.asarray(group_labels).astype(str)
     assigned_all = np.asarray(state_codes) if assigned_codes is None else np.asarray(assigned_codes)
     rows: list[pd.DataFrame] = []
     for _, test in folds:
         train = ~test
-        centroids, _ = state_geometry(latent[train], state_codes[train], n_states)
-        present = np.bincount(state_codes[train], minlength=n_states) > 0
-        codes = assigned_all[test]
-        codes = np.where((codes >= 0) & present[np.clip(codes, 0, n_states - 1)], codes, -1)
-        Zt = latent[test]
-        if group_offset:
-            gcodes = pd.factorize(group_labels[test], sort=True)[0]
-            offsets, _ = estimate_group_offsets(
-                Zt,
-                gcodes,
-                codes,
-                centroids,
-                min_cells=min_cells,
-                min_states=min_states,
-            )
-            Zt = Zt - offsets[gcodes]
-        dist = raw_distance(Zt, codes, centroids)
         template = index_template.clone() if hasattr(index_template, "clone") else None
         index = neighbor_index(
             latent[train],
@@ -314,22 +295,76 @@ def holdout_evidence(
             n_neighbors=n_neighbors,
             metric=metric,
         )
-        support, knn = neighbor_evidence(index, Zt, codes, states)
         rows.append(
-            pd.DataFrame(
-                {
-                    "group": np.asarray(group_labels)[test].astype(str),
-                    "true_state": labels[test],
-                    "assigned_state": np.where(
-                        codes >= 0, states[np.clip(codes, 0, n_states - 1)], schema.UNKNOWN_LABEL
-                    ),
-                    "distance": dist,
-                    "knn_distance": knn,
-                    "support": support,
-                }
+            fold_evidence(
+                latent,
+                state_codes,
+                group_labels,
+                test,
+                states,
+                index=index,
+                assigned_codes=assigned_all[test],
+                group_offset=group_offset,
+                min_cells=min_cells,
+                min_states=min_states,
             )
         )
     return pd.concat(rows, ignore_index=True)[list(EVIDENCE_COLUMNS)]
+
+
+def fold_evidence(
+    latent: np.ndarray,
+    state_codes: np.ndarray,
+    group_labels: np.ndarray,
+    test: np.ndarray,
+    states: np.ndarray | list[str],
+    *,
+    index: Any,
+    assigned_codes: np.ndarray,
+    group_offset: bool = True,
+    min_cells: int = 20,
+    min_states: int = 3,
+) -> pd.DataFrame:
+    """
+    The rows of :func:`holdout_evidence` for one fold: the held-out cells ``test`` against
+    the remaining cells, with ``index`` a neighbour index (:func:`neighbor_index`) fitted on
+    the remaining cells and ``assigned_codes`` the held-out cells' assigned state codes.
+    """
+    states = np.asarray(states).astype(str)
+    labels = states[state_codes]
+    n_states = len(states)
+    group_labels = np.asarray(group_labels).astype(str)
+    train = ~test
+    centroids, _ = state_geometry(latent[train], state_codes[train], n_states)
+    present = np.bincount(state_codes[train], minlength=n_states) > 0
+    codes = np.asarray(assigned_codes)
+    codes = np.where((codes >= 0) & present[np.clip(codes, 0, n_states - 1)], codes, -1)
+    Zt = latent[test]
+    if group_offset:
+        gcodes = pd.factorize(group_labels[test], sort=True)[0]
+        offsets, _ = estimate_group_offsets(
+            Zt,
+            gcodes,
+            codes,
+            centroids,
+            min_cells=min_cells,
+            min_states=min_states,
+        )
+        Zt = Zt - offsets[gcodes]
+    dist = raw_distance(Zt, codes, centroids)
+    support, knn = neighbor_evidence(index, Zt, codes, states)
+    return pd.DataFrame(
+        {
+            "group": group_labels[test],
+            "true_state": labels[test],
+            "assigned_state": np.where(
+                codes >= 0, states[np.clip(codes, 0, n_states - 1)], schema.UNKNOWN_LABEL
+            ),
+            "distance": dist,
+            "knn_distance": knn,
+            "support": support,
+        }
+    )[list(EVIDENCE_COLUMNS)]
 
 
 def merge_holdout_evidence(

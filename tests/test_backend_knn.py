@@ -47,6 +47,16 @@ def test_neighbor_votes_sum_to_k(toy):
     assert V.shape == (120, 3) and (V.sum(axis=1) == 9).all() and V.dtype.kind == "i"
 
 
+@pytest.mark.parametrize("weights", ["uniform", "distance"])
+def test_predict_proba_votes_matches_the_separate_calls(toy, weights):
+    X, y = toy
+    b = KNNBackend(n_neighbors=7, weights=weights).fit(X, y)
+    P, V = b.predict_proba_votes(X[::3])
+    np.testing.assert_array_equal(P, b.predict_proba(X[::3]))
+    np.testing.assert_array_equal(V, b.neighbor_votes(X[::3]))
+    assert P.dtype == np.float64 and V.dtype == np.int32
+
+
 def test_cosine_matches_brute_force_ranking(toy):
     X, y = toy
     b = KNNBackend(n_neighbors=3, metric="cosine").fit(X, y)

@@ -209,3 +209,19 @@ def test_build_space_non_count_input_warns(small_ref):
             config=ExpressionConfig(min_cells=5),
         )
     assert sp.params["input"] == "non_count"
+
+
+def test_holdout_null_does_not_depend_on_n_jobs():
+    rng = np.random.default_rng(3)
+    g = np.repeat(np.arange(6), 120)
+    s = np.tile(np.repeat(np.arange(4), 30), 6)
+    X = rng.poisson(1.0 + s[:, None] * np.linspace(0, 1, 40), size=(len(g), 40)).astype(float)
+    prof, rows = ex.pseudobulk_profiles(X, g, s, min_cells=10)
+    cfg = ex.ExpressionConfig(n_components=5)
+    serial, z1 = ex.holdout_null(prof, rows, 4, cfg, return_profiles=True)
+    parallel, z2 = ex.holdout_null(
+        prof, rows, 4, ex.ExpressionConfig(n_components=5, n_jobs=2), return_profiles=True
+    )
+    pd.testing.assert_frame_equal(serial, parallel)
+    np.testing.assert_allclose(z1, z2)
+    assert len(serial) == len(rows)

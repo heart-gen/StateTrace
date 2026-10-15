@@ -71,7 +71,9 @@ class LODOConfig:
     per_group_confusion
         Also keep one confusion matrix per held-out group.
     n_jobs
-        Threads over folds (array backends only).
+        Worker processes over folds (array backends only; ``-1`` uses every core). Native
+        thread pools (BLAS, OpenMP neighbour search) inside each worker are capped so the
+        folds share the cores; results are identical for any ``n_jobs``.
     refit_latent
         Reserved; ``True`` raises :class:`NotImplementedError`.
     random_state
@@ -394,19 +396,41 @@ def _cell_table_from_proba(
     )
 
 
-def _run_fold_array(backend: MappingBackend, X, y, groups, test, states, fold_name, abstain_below):
+def _run_fold_array(
+    backend: MappingBackend,
+    X,
+    y,
+    groups,
+    test,
+    states,
+    fold_name,
+    abstain_below,
+    *,
+    evidence: dict[str, Any] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """
+    Fit on the cells outside ``test`` and predict the held-out cells. With ``evidence``
+    (``state_codes`` and ``min_cells``) also return their novelty evidence
+    (:func:`statetrace.novelty.fold_evidence`) against the same fitted index, judged by the
+    fold's predictions.
+    """
     train = ~test
     b = backend.clone().fit(X[train], y[train])
-    P_local = b.predict_proba(X[test])
-    P = np.zeros((int(test.sum()), len(states)), dtype=np.float64)
     col = np.searchsorted(states, b.classes_)
+    votes_local = None
+    if hasattr(b, "predict_proba_votes"):
+        P_local, votes_local = b.predict_proba_votes(X[test])
+    else:
+        P_local = b.predict_proba(X[test])
+        if hasattr(b, "neighbor_votes"):
+            votes_local = b.neighbor_votes(X[test])
+    P = np.zeros((int(test.sum()), len(states)), dtype=np.float64)
     P[:, col] = P_local
     votes = None
-    if hasattr(b, "neighbor_votes"):
-        V = np.zeros_like(P, dtype=np.int32)
-        V[:, col] = b.neighbor_votes(X[test])
-        votes = V
-    return _cell_table_from_proba(
+    if votes_local is not None:
+        votes = np.zeros_like(P, dtype=np.int32)
+        votes[:, col] = votes_local
+    table = _cell_table_from_proba(
         P,
         votes,
         states=states,
@@ -415,6 +439,23 @@ def _run_fold_array(backend: MappingBackend, X, y, groups, test, states, fold_na
         fold_name=fold_name,
         abstain_below=abstain_below,
     )
+    if evidence is None:
+        return table, None
+    state_codes = evidence["state_codes"]
+    index = novelty.neighbor_index(X[train], states[state_codes[train]], backend=b)
+    ev = novelty.fold_evidence(
+        X,
+        state_codes,
+        groups,
+        test,
+        states,
+        index=index,
+        assigned_codes=pd.Index(states).get_indexer(
+            table["predicted_state"].to_numpy().astype(str)
+        ),
+        min_cells=evidence["min_cells"],
+    )
+    return table, ev
 
 
 def _study_holdout_evidence(
@@ -431,26 +472,17 @@ def _study_holdout_evidence(
         raise ValueError("calibration_unit='study' needs at least two studies")
     obs = np.asarray(obs_names).astype(str)
     idx = np.concatenate([obs[m] for _, m in folds])
-    cp = pd.concat(
-        [
-            _run_fold_array(backend, X, y, groups, m, states, name, config.abstain_below)
-            for name, m in folds
-        ],
-        ignore_index=True,
-    )
-    cp.index = pd.Index(idx, name="cell")
-    cp = cp.reindex(obs)
-    assigned = pd.Index(states).get_indexer(cp["predicted_state"].to_numpy().astype(str))
-    evidence = novelty.holdout_evidence(
+    parts = _run_folds_array(
+        backend,
         X,
-        state_codes,
+        y,
         groups,
         folds,
         states,
-        index_template=backend,
-        min_cells=config.min_group_cells,
-        assigned_codes=assigned,
+        config,
+        evidence={"state_codes": state_codes, "min_cells": config.min_group_cells},
     )
+    evidence = pd.concat([ev for _, ev in parts], ignore_index=True)
     evidence.index = pd.Index(idx, name="cell")
     return evidence.reindex(obs)
 
@@ -464,16 +496,26 @@ EXPRESSION_REPRODUCIBILITY_COLUMNS = (
 )
 
 
-def _run_folds_array(backend, X, y, groups, folds, states, config) -> list[pd.DataFrame]:
+def _run_folds_array(
+    backend, X, y, groups, folds, states, config, *, evidence: dict[str, Any] | None = None
+) -> list[tuple[pd.DataFrame, pd.DataFrame | None]]:
+    """:func:`_run_fold_array` over ``folds``, in ``config.n_jobs`` worker processes."""
     if config.n_jobs and config.n_jobs != 1:
         from joblib import Parallel, delayed
 
-        return Parallel(n_jobs=config.n_jobs, prefer="threads")(
-            delayed(_run_fold_array)(backend, X, y, groups, m, states, name, config.abstain_below)
+        # fixed-width strings travel to the workers as memory-mapped arrays, not pickles
+        y_, groups_ = np.asarray(y, dtype=str), np.asarray(groups, dtype=str)
+        parts = Parallel(n_jobs=config.n_jobs)(
+            delayed(_run_fold_array)(
+                backend, X, y_, groups_, m, states, name, config.abstain_below, evidence=evidence
+            )
             for name, m in folds
         )
+        return [(t.astype({"group": object, "true_state": object}), ev) for t, ev in parts]
     return [
-        _run_fold_array(backend, X, y, groups, m, states, name, config.abstain_below)
+        _run_fold_array(
+            backend, X, y, groups, m, states, name, config.abstain_below, evidence=evidence
+        )
         for name, m in folds
     ]
 
@@ -499,7 +541,8 @@ def _expression_reproducibility(
         )
     knn = backend if isinstance(backend, KNNBackend) else KNNBackend()
     cp = pd.concat(
-        _run_folds_array(knn, coords, y, groups, folds, states, config), ignore_index=True
+        [t for t, _ in _run_folds_array(knn, coords, y, groups, folds, states, config)],
+        ignore_index=True,
     )
     gm = metrics.group_state_table(cp, min_group_cells=config.min_group_cells)
     expr = metrics.state_table(gm, cp, states=states, thresholds=config.thresholds)
@@ -705,7 +748,14 @@ def run_validation(
         if X is None:
             raise ValueError("an array backend needs the latent matrix X")
         X = np.asarray(X, dtype=np.float32)
-        parts = _run_folds_array(backend, X, y, groups, folds, states, config)
+        # the novelty evidence is measured in the same folds, against each fold's fitted index
+        fold_ev = (
+            {"state_codes": state_codes, "min_cells": config.min_group_cells}
+            if method != "random_split"
+            else None
+        )
+        runs = _run_folds_array(backend, X, y, groups, folds, states, config, evidence=fold_ev)
+        parts = [t for t, _ in runs]
     else:
         if adata is None or state_key is None:
             raise ValueError("an AnnData backend needs adata and state_key")
@@ -722,18 +772,19 @@ def run_validation(
     calibration = None
     evidence = None
     if X is not None and method != "random_split":
-        predicted = cp["predicted_state"].to_numpy().astype(str)
-        assigned = pd.Index(states).get_indexer(predicted)  # -1 for unknown / abstained
-        evidence = novelty.holdout_evidence(
-            X,
-            state_codes,
-            groups,
-            folds,
-            states,
-            index_template=backend if is_array else None,
-            min_cells=config.min_group_cells,
-            assigned_codes=assigned,
-        )
+        if is_array:
+            evidence = pd.concat([ev for _, ev in runs], ignore_index=True)
+        else:
+            predicted = cp["predicted_state"].to_numpy().astype(str)
+            evidence = novelty.holdout_evidence(
+                X,
+                state_codes,
+                groups,
+                folds,
+                states,
+                min_cells=config.min_group_cells,
+                assigned_codes=pd.Index(states).get_indexer(predicted),  # -1: unknown
+            )
         evidence.index = pd.Index(idx.astype(str), name="cell")
         evidence = evidence.reindex(np.asarray(obs_names).astype(str))
         units = np.full(len(states), "group", dtype=object)
