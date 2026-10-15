@@ -225,3 +225,28 @@ def test_holdout_null_does_not_depend_on_n_jobs():
     pd.testing.assert_frame_equal(serial, parallel)
     np.testing.assert_allclose(z1, z2)
     assert len(serial) == len(rows)
+
+
+def test_pca_retries_with_gesvd_when_gesdd_does_not_converge(monkeypatch):
+    rng = np.random.default_rng(0)
+    Z = rng.normal(size=(30, 12))
+    expected = ex._pca(Z, 4)
+
+    def fails(*args, **kwargs):
+        raise np.linalg.LinAlgError("SVD did not converge")
+
+    monkeypatch.setattr(np.linalg, "svd", fails)
+    got = ex._pca(Z, 4)
+    # same subspace; singular vectors are defined up to sign
+    np.testing.assert_allclose(np.abs(got @ expected.T), np.eye(4), atol=1e-8)
+
+
+def test_numerical_failure_is_not_a_silent_latent_fallback(small_ref, monkeypatch):
+    import statetrace.reference as reference
+
+    def fails(*args, **kwargs):
+        raise np.linalg.LinAlgError("SVD did not converge")
+
+    monkeypatch.setattr(reference, "build_expression_space", fails)
+    with pytest.raises(np.linalg.LinAlgError):
+        Reference(small_ref.copy(), **REF_KW).fit()

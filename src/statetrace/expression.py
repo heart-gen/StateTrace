@@ -285,7 +285,16 @@ def _pca(Z: np.ndarray, n_components: int) -> np.ndarray:
     if Z.shape[0] < 2:
         return np.zeros((0, Z.shape[1]))
     Zc = Z - Z.mean(axis=0)
-    _, _, vt = np.linalg.svd(Zc, full_matrices=False)
+    try:
+        _, _, vt = np.linalg.svd(Zc, full_matrices=False)
+    except np.linalg.LinAlgError:
+        # LAPACK's divide-and-conquer driver (gesdd) can fail to converge on a matrix that the
+        # QR-iteration driver (gesvd) handles; which matrices fail depends on the BLAS kernels
+        # of the CPU, so the same reference can fail on one node and not on another
+        from scipy.linalg import svd
+
+        logger.warning("SVD (gesdd) did not converge on %s; retrying with gesvd", Zc.shape)
+        _, _, vt = svd(Zc, full_matrices=False, lapack_driver="gesvd")
     k = int(min(n_components, Z.shape[0] - 1, Z.shape[1]))
     return vt[:k]
 

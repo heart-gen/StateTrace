@@ -275,6 +275,10 @@ class StateReference:
                     self.states_,
                     config=self.expression_config,
                 )
+            except np.linalg.LinAlgError:
+                # a ValueError subclass, but a numerical failure, not too little data: falling
+                # back to the latent would change the diagnostics without saying why
+                raise
             except ValueError as err:
                 warnings.warn(
                     f"expression space not built ({err}); shift diagnostics will use the "

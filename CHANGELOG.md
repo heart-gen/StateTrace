@@ -101,6 +101,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python 3.11: `isinstance(backend, MappingBackend)` raised on an unfitted `KNNBackend`,
   because 3.11 checks protocol members with `hasattr`, which runs the `classes_` property.
   The backend protocols now look members up statically on 3.11, as 3.12 does.
+- Expression space: when LAPACK's divide-and-conquer SVD (gesdd) does not converge, the PCA
+  retries with the QR-iteration driver (gesvd). Which matrices fail depends on the CPU's BLAS
+  kernels: a 210k-cell PBMC reference failed on one node type and not on another.
+- `Reference.fit` no longer turns that numerical failure into the "expression space not built"
+  warning (`LinAlgError` is a `ValueError`); it used to fall back to the mapping latent and so
+  change the shift and reproducibility diagnostics with only a warning.
 
 ### Planned
 - Stage 7 StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
