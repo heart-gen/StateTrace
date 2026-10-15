@@ -77,6 +77,18 @@ def test_scanvi_backend_points_to_extra():
     assert proc.returncode == 0, proc.stderr
 
 
+def test_plotting_points_to_extra():
+    code = (
+        "import sys; sys.modules['matplotlib'] = None\n"
+        "from statetrace.plotting import plot_state_reproducibility\n"
+        "try:\n    plot_state_reproducibility()\n"
+        "except ImportError as e:\n    assert 'statetrace[plot]' in str(e), str(e)\n"
+        "else:\n    raise SystemExit('expected ImportError')\n"
+    )
+    proc = _run(code)
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_public_names_resolve():
     import statetrace as st
 
