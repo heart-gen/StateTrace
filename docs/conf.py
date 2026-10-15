@@ -38,7 +38,7 @@ release = version = _read_version()
 copyright = f"{datetime.now(UTC).year}, {author}"
 
 extensions = [
-    "myst_parser",
+    "myst_nb",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
@@ -48,13 +48,16 @@ extensions = [
     "sphinx_copybutton",
 ]
 
-source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
+source_suffix = {".md": "myst-nb", ".ipynb": "myst-nb", ".rst": "restructuredtext"}
 root_doc = "index"
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "jupyter_execute", "**.ipynb_checkpoints", "Thumbs.db", ".DS_Store"]
 
 myst_enable_extensions = ["colon_fence", "deflist"]
 myst_heading_anchors = 3
+# tutorials are committed with their outputs (`make tutorials` re-runs them); the docs build
+# never executes them
+nb_execution_mode = "off"
 
 autosummary_generate = True
 autodoc_default_options = {

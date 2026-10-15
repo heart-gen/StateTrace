@@ -72,6 +72,9 @@ because it depends on graph-tool: `conda install scxmatch -c conda-forge -c bioc
 
 ## Quickstart
 
+Four tutorials, from a donor holdout to a transport report from two `.h5ad` files, are in the
+[documentation](https://statetrace.readthedocs.io/en/latest/) and under `docs/tutorials/`.
+
 ```python
 import statetrace as st
 from statetrace.datasets import simulate_transport
