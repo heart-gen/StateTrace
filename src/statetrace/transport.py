@@ -281,6 +281,7 @@ class TransportConfig:
             raise TypeError("two_sample must be a TwoSampleConfig or None")
 
     def to_dict(self) -> dict[str, Any]:
+        """The configuration as a JSON-serialisable dict (recorded in the route)."""
         return dataclasses.asdict(self)
 
 
@@ -399,9 +400,17 @@ class TransportRoute:
 
     @property
     def supported_states(self) -> list[str]:
+        """States whose transport status is ``supported``."""
         return list(self.states.index[self.states["status"] == "supported"])
 
     def states_with(self, status: str | list[str]) -> list[str]:
+        """
+        States whose transport status is ``status`` (one status or a list).
+
+        Returns
+        -------
+        list of str
+        """
         status = [status] if isinstance(status, str) else list(status)
         return list(self.states.index[self.states["status"].isin(status)])
 
@@ -415,6 +424,14 @@ class TransportRoute:
         return [str(s) for s in states]
 
     def summary(self) -> str:
+        """
+        A short text summary: query cells and groups, the number of states per transport status,
+        and the fraction of cells supported, uncertain and out of reference.
+
+        Returns
+        -------
+        str
+        """
         counts = self.states["status"].value_counts().reindex(schema.TRANSPORT_STATUS, fill_value=0)
         lines = [
             f"StateTrace transport ({self.predictions.backend}) over {self.group_key!r}: "

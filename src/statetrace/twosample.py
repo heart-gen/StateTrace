@@ -140,6 +140,7 @@ class TwoSampleConfig:
             raise ValueError("min_cells and min_groups must be >= 2")
 
     def to_dict(self) -> dict[str, Any]:
+        """The configuration as a JSON-serialisable dict (recorded in the route)."""
         return dataclasses.asdict(self)
 
 

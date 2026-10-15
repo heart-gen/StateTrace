@@ -1,4 +1,4 @@
-.PHONY: test test-slow lint format docs release
+.PHONY: test test-slow lint format docs tutorials release
 
 PY ?= python
 
@@ -16,6 +16,10 @@ format:
 
 docs:
 	$(PY) -m sphinx -W -b html docs docs/_build/html
+
+# re-run the tutorial notebooks in place (their stored outputs are what the docs show)
+tutorials:
+	$(PY) -m jupyter execute --inplace docs/tutorials/*.ipynb
 
 # Usage: make release v=0.1.1
 # Bumps the version, commits and tags; the Release workflow builds and

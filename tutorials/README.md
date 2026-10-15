@@ -1,12 +1,15 @@
 # Tutorials
 
-Notebooks are added as each feature lands. Planned:
+The tutorials are notebooks under [`docs/tutorials/`](../docs/tutorials/), committed with their
+outputs and rendered in the documentation. They run on simulated data in seconds; re-run them
+with `make tutorials PY=.venv/bin/python` (needs the `docs` extra).
 
-| Notebook | Covers | Status |
-|---|---|---|
-| `01_validate_reference.ipynb` | `simulate_reference` -> `Reference.fit()` -> `leave_one_donor_out()` vs `random_split()`; reading `state_metrics` and `lodo_stability` | after v0.1 |
-| `02_freeze_and_reload.ipynb` | `freeze()` / `Reference.load()`; inspecting a `.statetrace` directory without StateTrace | after v0.1 |
-| `03_transport_query.ipynb` | `transport()`, calibration, abstention, `state_abundance()`, `pseudobulk()` | v0.2 |
-| `04_nvu_hiv_oud.ipynb` | the NVU -> HIV/OUD application (data in the benchmark repository) | v0.2 |
+| Notebook | Covers |
+|---|---|
+| `01_validate_reference.ipynb` | `Reference.fit()` -> `leave_one_group_out()` vs `random_split()`; reproducibility categories; `state_metrics`, `group_metrics` |
+| `02_freeze_and_reload.ipynb` | `freeze()` / `Reference.load()`; the files of a `.statetrace` directory, read without StateTrace; checksum verification |
+| `03_transport_query.ipynb` | `validate_transport()`; statuses against the planted truth; cell categories; `state_abundance()`, `pseudobulk()`; an external mapper through `Predictions`; `compare_backends()`; a withheld population; `report()`, `to_obs()` |
+| `04_two_h5ads_to_report.ipynb` | the whole workflow from a reference and a query `.h5ad` to a transport report |
 
-Until then the [quickstart](../docs/quickstart.md) is the executable walkthrough.
+Planned: the NVU -> HIV/OUD application on real data (the data and analysis live in the
+benchmark repository).

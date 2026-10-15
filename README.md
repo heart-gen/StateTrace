@@ -59,17 +59,21 @@ pip install statetrace
 | Extra | Adds | Needed for |
 |---|---|---|
 | `dev` | pytest, pytest-cov, hypothesis, ruff | tests and linting |
-
-The optional scXMatch engine needs the `scxmatch` package, which installs only from conda
-because it depends on graph-tool: `conda install scxmatch -c conda-forge -c bioconda`.
 | `docs` | sphinx, myst-parser, sphinx-rtd-theme | building the docs |
+| `plot` | matplotlib | `statetrace.plotting` (planned) |
 | `scvi` | scvi-tools (pulls in torch) | the scANVI refit-per-fold backend (planned) |
 | `all` | all of the above | |
 
 torch is never a direct dependency; install the build that matches your machine before adding
 the `scvi` extra. Python 3.11 to 3.14.
 
+The optional scXMatch engine needs the `scxmatch` package, which installs only from conda
+because it depends on graph-tool: `conda install scxmatch -c conda-forge -c bioconda`.
+
 ## Quickstart
+
+Four tutorials, from a donor holdout to a transport report from two `.h5ad` files, are in the
+[documentation](https://statetrace.readthedocs.io/en/latest/) and under `docs/tutorials/`.
 
 ```python
 import statetrace as st

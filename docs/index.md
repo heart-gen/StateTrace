@@ -24,6 +24,16 @@ concepts
 ```
 
 ```{toctree}
+:maxdepth: 1
+:caption: Tutorials
+
+tutorials/01_validate_reference
+tutorials/02_freeze_and_reload
+tutorials/03_transport_query
+tutorials/04_two_h5ads_to_report
+```
+
+```{toctree}
 :maxdepth: 2
 :caption: Guides
 

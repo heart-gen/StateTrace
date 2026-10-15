@@ -97,10 +97,15 @@ class Predictions:
     # ------------------------------------------------------------ properties
     @property
     def obs_names(self) -> pd.Index:
+        """Cell identifiers (the index shared by every per-cell field)."""
         return self.labels.index
 
     @property
     def states(self) -> list[str]:
+        """
+        The states the backend can assign: the probability columns when ``proba`` is set,
+        otherwise the sorted distinct labels without ``unknown``.
+        """
         if self.proba is not None:
             return list(self.proba.columns)
         return sorted(s for s in self.labels.unique() if s != schema.UNKNOWN_LABEL)
@@ -125,18 +130,42 @@ class Predictions:
         return P
 
     def second_best(self) -> pd.Series:
+        """
+        The second most probable state per cell; missing when ``proba`` has fewer than two
+        columns or is absent.
+
+        Returns
+        -------
+        pandas.Series
+        """
         if self.proba is None or self.proba.shape[1] < 2:
             return pd.Series(pd.NA, index=self.obs_names, dtype="object")
         order = np.argsort(-self.proba.to_numpy(), axis=1, kind="stable")
         return pd.Series(np.asarray(self.proba.columns)[order[:, 1]], index=self.obs_names)
 
     def margin(self) -> pd.Series:
+        """
+        Top-1 minus top-2 probability per cell; NaN when ``proba`` has fewer than two columns or
+        is absent.
+
+        Returns
+        -------
+        pandas.Series
+        """
         if self.proba is None or self.proba.shape[1] < 2:
             return pd.Series(np.nan, index=self.obs_names)
         srt = -np.sort(-self.proba.to_numpy(), axis=1)
         return pd.Series(srt[:, 0] - srt[:, 1], index=self.obs_names)
 
     def to_frame(self) -> pd.DataFrame:
+        """
+        One row per cell: ``label``, ``confidence``, ``margin``, ``second_best``,
+        ``uncertainty``, ``support`` (NaN when not provided) and ``backend``.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
         df = pd.DataFrame(
             {
                 "label": self.labels,
@@ -151,6 +180,19 @@ class Predictions:
         return df
 
     def subset(self, index: pd.Index | np.ndarray) -> Predictions:
+        """
+        The predictions for ``index`` (cell identifiers, in that order); cells not present get
+        missing values.
+
+        Parameters
+        ----------
+        index
+            Cell identifiers.
+
+        Returns
+        -------
+        Predictions
+        """
         idx = pd.Index(np.asarray(index).astype(str))
         return Predictions(
             labels=self.labels.reindex(idx),
@@ -176,6 +218,30 @@ class Predictions:
         support: Any = None,
         backend: str = "custom",
     ) -> Predictions:
+        """
+        Build predictions from arrays aligned to ``obs_names``.
+
+        Parameters
+        ----------
+        obs_names
+            Cell identifiers.
+        labels
+            Assigned state per cell (``unknown`` for an abstention).
+        proba
+            Optional cells x states probabilities; ``states`` names the columns when it
+            is an array.
+        states
+            Column names for an array ``proba``.
+        confidence, uncertainty, support
+            Optional per-cell scores. Without ``confidence``,
+            it is the top probability, else ``1 - uncertainty``.
+        backend
+            Name recorded as provenance.
+
+        Returns
+        -------
+        Predictions
+        """
         idx = pd.Index(np.asarray(obs_names).astype(str), name="cell")
         P = None
         if proba is not None:

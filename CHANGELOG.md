@@ -96,6 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundles still load; their two-sample rows read `unsupported` until re-frozen.
 - Positioning: StateTrace orchestrates shift evidence and is not a distribution-shift test
   (README, concepts, transport guide, roadmaps).
+- matplotlib is no longer a core dependency: the new `plot` extra carries it for
+  `statetrace.plotting`, which says so when it is missing. scvi-tools stays in the `scvi` extra.
 
 ### Fixed
 - Python 3.11: `isinstance(backend, MappingBackend)` raised on an unfitted `KNNBackend`,

@@ -31,7 +31,6 @@ dependencies = [
     "pandas>=2.2,<3",
     "scipy>=1.13,<2",
     "scikit-learn>=1.5,<2",
-    "matplotlib>=3.8,<4",
 ]
 
 [project.optional-dependencies]
@@ -42,11 +41,16 @@ dev = [
     "ruff==0.6.9",
 ]
 docs = [
-    "myst-parser>=3,<5",
+    "ipykernel>=6,<8",
+    "myst-nb>=1.1,<2",
     "sphinx>=7,<9",
     "sphinx-autodoc-typehints>=2,<4",
     "sphinx-copybutton>=0.5,<1",
     "sphinx-rtd-theme>=3,<4",
+]
+# statetrace.plotting (planned); scanpy brings matplotlib too, but StateTrace's own use is optional.
+plot = [
+    "matplotlib>=3.8,<4",
 ]
 # scvi-tools pulls in torch transitively. torch is never listed directly so users
 # can install the CPU/GPU build that matches their machine.
@@ -54,7 +58,7 @@ scvi = [
     "scvi-tools>=1.2,<2",
 ]
 all = [
-    "statetrace[dev,docs,scvi]",
+    "statetrace[dev,docs,plot,scvi]",
 ]
 
 [project.urls]
