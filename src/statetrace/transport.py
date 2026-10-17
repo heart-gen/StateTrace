@@ -759,6 +759,8 @@ def validate_transport(
     knn_dist = np.full(len(labels), np.nan)
     knn_nov = np.full(len(labels), np.nan)
     joint_nov = np.full(len(labels), np.nan)
+    support_nov = np.full(len(labels), np.nan)
+    knn_support_nov = np.full(len(labels), np.nan)
     ood = np.zeros(len(labels), dtype=bool)
     ood_applied: dict[str, Any] | None = None
     shift = np.full(len(states), np.nan)
