@@ -173,7 +173,7 @@ def reference_distance(
 
 
 OOD_RULES = ("z", "quantile")
-OOD_SCORES = ("centroid", "knn", "joint")
+OOD_SCORES = ("centroid", "knn", "joint", "support", "knn_support")
 EVIDENCE_COLUMNS = ("group", "true_state", "assigned_state", "distance", "knn_distance", "support")
 _QUANTILE_COLUMNS = {0.95: "q95", 0.99: "q99"}
 
@@ -404,29 +404,51 @@ def _q(x: np.ndarray, q: float) -> float:
 
 
 def holdout_distance_calibration(
-    evidence: pd.DataFrame, geometry: np.ndarray, states: np.ndarray | list[str]
+    evidence: pd.DataFrame,
+    geometry: np.ndarray,
+    states: np.ndarray | list[str],
+    *,
+    support_step: float | None = None,
 ) -> pd.DataFrame:
     """
     Per-state statistics of the held-out evidence from :func:`holdout_evidence`: mean, sd and
     95th / 99th percentiles of the centroid distance and of the kNN distance; quantiles of the
-    joint score (the larger of the two standardised distances); and the 5th / 10th percentiles
-    and median of local support. ``mean_in_sample`` / ``sd_in_sample`` from ``geometry`` are
-    kept for comparison. Unlike in-sample statistics these include the effect of an unseen
-    group, so standardising query cells against them gives an out-of-reference rate close to
-    the nominal one for genuinely new donors.
+    joint score (the larger of the two standardised distances); the 5th / 10th percentiles,
+    median, mean and sd of local support with quantiles of the standardised support deficit
+    (:func:`support_novelty`) and of the kNN-or-support score (the larger of the standardised
+    kNN distance and the support deficit). ``mean_in_sample`` / ``sd_in_sample`` from
+    ``geometry`` are kept for comparison. Unlike in-sample statistics these include the effect
+    of an unseen group, so standardising query cells against them gives an out-of-reference
+    rate close to the nominal one for genuinely new donors.
+
+    Support is a vote fraction over ``k`` neighbours, so its sd is never read below one
+    neighbour's vote: ``support_step`` (``1 / k``; stored as ``support_step_holdout``) floors
+    the sd behind the support deficit, which keeps the score finite for a state whose held-out
+    cells all had unanimous neighbourhoods. When not given it is inferred from the evidence as
+    the vote of one dissenting neighbour (``1 - max(support < 1)``), NaN when no held-out cell
+    had one.
     """
     rows = []
     by = "assigned_state" if "assigned_state" in evidence else "true_state"
+    if support_step is None:
+        s_all = evidence["support"].to_numpy(dtype=float)
+        s_all = s_all[np.isfinite(s_all) & (s_all < 1.0)]
+        support_step = float(1.0 - s_all.max()) if s_all.size else np.nan
+    step = float(support_step)
     for k, s_ in enumerate(np.asarray(states).astype(str)):
         e = evidence[evidence[by].astype(str) == s_]
         d = e["distance"].to_numpy(dtype=float)
         d = d[np.isfinite(d)]
         kd = e["knn_distance"].to_numpy(dtype=float)
         kd = kd[np.isfinite(kd)]
-        sup = e["support"].to_numpy(dtype=float)
-        sup = sup[np.isfinite(sup)]
+        sup_all = e["support"].to_numpy(dtype=float)
+        sup = sup_all[np.isfinite(sup_all)]
         mean, sd = (float(d.mean()), float(d.std(ddof=1))) if d.size > 1 else (np.nan, np.nan)
         kmean, ksd = (float(kd.mean()), float(kd.std(ddof=1))) if kd.size > 1 else (np.nan, np.nan)
+        smean, ssd = (
+            (float(sup.mean()), float(sup.std(ddof=1))) if sup.size > 1 else (np.nan, np.nan)
+        )
+        ssd_eff = max(ssd, step) if np.isfinite(step) else ssd  # one neighbour's vote at least
         both = np.isfinite(e["distance"].to_numpy(dtype=float)) & np.isfinite(
             e["knn_distance"].to_numpy(dtype=float)
         )
@@ -436,6 +458,15 @@ def holdout_distance_calibration(
             joint = np.maximum(zc, zk)
         else:
             joint = np.array([])
+        supz = (smean - sup) / ssd_eff if ssd_eff > 0 else np.array([])
+        ks = np.isfinite(e["knn_distance"].to_numpy(dtype=float)) & np.isfinite(sup_all)
+        if ks.any() and ksd > 0 and ssd_eff > 0:
+            knn_support = np.maximum(
+                (e.loc[ks, "knn_distance"].to_numpy(dtype=float) - kmean) / ksd,
+                (smean - sup_all[ks]) / ssd_eff,
+            )
+        else:
+            knn_support = np.array([])
         rows.append(
             {
                 "state": s_,
@@ -456,6 +487,13 @@ def holdout_distance_calibration(
                 "support_q05_holdout": _q(sup, 0.05),
                 "support_q10_holdout": _q(sup, 0.10),
                 "support_median_holdout": _q(sup, 0.5),
+                "support_mean_holdout": smean,
+                "support_sd_holdout": ssd,
+                "support_step_holdout": step,
+                "supportz_q95_holdout": _q(supz, 0.95),
+                "supportz_q99_holdout": _q(supz, 0.99),
+                "knn_support_q95_holdout": _q(knn_support, 0.95),
+                "knn_support_q99_holdout": _q(knn_support, 0.99),
             }
         )
     return pd.DataFrame(rows).set_index("state")
@@ -505,8 +543,41 @@ def knn_novelty(
     return out
 
 
+def support_novelty(
+    support: np.ndarray,
+    assigned_codes: np.ndarray,
+    calibration: pd.DataFrame | None,
+    states: np.ndarray | list[str],
+) -> np.ndarray:
+    """
+    Local-support deficit standardised against the held-out support of the assigned state:
+    ``(mean_holdout - support) / sd_holdout``, positive when fewer of the cell's reference
+    neighbours carry its state than held-out reference cells of that state had. A population
+    the reference lacks that sits where two reference states meet (a generic T-cell state
+    between regulatory and cytotoxic ones) is no farther from the reference than its
+    neighbours' own cells, so no distance sees it; its mixed neighbourhood does. The sd is
+    floored at one neighbour's vote (``support_step_holdout``), so a state whose held-out
+    cells were unanimous still scores. NaN without calibration.
+    """
+    codes = np.asarray(assigned_codes)
+    mean = _per_state(calibration, states, "support_mean_holdout")
+    sd = _per_state(calibration, states, "support_sd_holdout")
+    step = _per_state(calibration, states, "support_step_holdout")
+    sd = np.where(np.isfinite(step), np.fmax(sd, step), sd)
+    out = np.full(len(codes), np.nan)
+    ok = codes >= 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = (mean[codes[ok]] - np.asarray(support, dtype=float)[ok]) / sd[codes[ok]]
+    out[ok] = np.where(sd[codes[ok]] > 0, z, np.nan)
+    return out
+
+
 def joint_novelty(novelty: np.ndarray, knn_nov: np.ndarray) -> np.ndarray:
-    """The larger of the standardised centroid and kNN distances (NaN when either is missing)."""
+    """
+    The larger of two standardised scores (NaN when either is missing): the centroid and kNN
+    distances for the ``joint`` score, the kNN distance and the support deficit for
+    ``knn_support``.
+    """
     a = np.asarray(novelty, dtype=float)
     b = np.asarray(knn_nov, dtype=float)
     out = np.maximum(a, b)
@@ -526,19 +597,24 @@ def out_of_reference_mask(
     states: np.ndarray | list[str] | None = None,
     score: str = "centroid",
     knn_distance: np.ndarray | None = None,
+    support: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
     Decide which cells lie outside their assigned state's reference distribution.
 
     ``score`` picks the evidence: ``"centroid"`` (distance to the state centroid), ``"knn"``
-    (distance to the k-th nearest reference cell) or ``"joint"`` (the larger of the two
-    standardised distances). ``rule="z"`` flags cells whose standardised score exceeds ``z``;
+    (distance to the k-th nearest reference cell), ``"joint"`` (the larger of the two
+    standardised distances), ``"support"`` (the standardised local-support deficit,
+    :func:`support_novelty`) or ``"knn_support"`` (the larger of the standardised kNN distance
+    and the support deficit: far from every reference cell, or in a neighbourhood the assigned
+    state does not own). ``rule="z"`` flags cells whose standardised score exceeds ``z``;
     ``rule="quantile"`` flags cells whose score exceeds the ``quantile`` (0.95 or 0.99) of the
     held-out reference cells of that state (raw distance for the centroid and kNN scores, the
-    joint statistic itself for ``"joint"``), so a genuinely new donor of an intact state is
-    flagged at about the nominal rate. Cells or states for which the chosen calibration is
-    missing fall back to the centroid z rule, and so does the whole call when no calibration
-    exists; the second return value records what was applied.
+    standardised statistic itself for ``"joint"``, ``"support"`` and ``"knn_support"``), so a
+    genuinely new donor of an intact state is flagged at about the nominal rate. Cells or
+    states for which the chosen calibration is missing fall back to the centroid z rule, and
+    so does the whole call when no calibration exists; the second return value records what
+    was applied.
     """
     if rule not in OOD_RULES:
         raise ValueError(f"rule must be one of {OOD_RULES}, got {rule!r}")
@@ -571,7 +647,7 @@ def out_of_reference_mask(
             if rule == "z"
             else _per_state(calibration, states, f"knn_{qname}_holdout")
         )
-    else:
+    elif score == "joint":
         if knn_distance is None:
             applied["fallback"] = True
             return z_mask, applied
@@ -580,6 +656,29 @@ def out_of_reference_mask(
             np.full(len(states), float(z))
             if rule == "z"
             else _per_state(calibration, states, f"joint_{qname}_holdout")
+        )
+    elif score == "support":
+        if support is None:
+            applied["fallback"] = True
+            return z_mask, applied
+        value = support_novelty(support, codes, calibration, states)
+        thr_state = (
+            np.full(len(states), float(z))
+            if rule == "z"
+            else _per_state(calibration, states, f"supportz_{qname}_holdout")
+        )
+    else:  # knn_support
+        if knn_distance is None or support is None:
+            applied["fallback"] = True
+            return z_mask, applied
+        value = joint_novelty(
+            knn_novelty(knn_distance, codes, calibration, states),
+            support_novelty(support, codes, calibration, states),
+        )
+        thr_state = (
+            np.full(len(states), float(z))
+            if rule == "z"
+            else _per_state(calibration, states, f"knn_support_{qname}_holdout")
         )
     if rule == "z" and score == "centroid":  # pragma: no cover - handled above
         thr_state = np.full(len(states), float(z))
@@ -682,6 +781,7 @@ def evidence_ood_mask(
         states=states,
         score=score,
         knn_distance=evidence["knn_distance"].to_numpy(dtype=float),
+        support=evidence["support"].to_numpy(dtype=float),
     )
     return codes, mask
 

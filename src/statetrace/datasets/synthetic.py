@@ -71,13 +71,58 @@ def _anisotropy(seed: int, n_states: int, n_latent: int, factor: float, dims: in
 
 
 def _counts_from_latent(
-    rng: np.random.Generator, z: np.ndarray, W: np.ndarray, b: np.ndarray
+    rng: np.random.Generator,
+    z: np.ndarray,
+    W: np.ndarray,
+    b: np.ndarray,
+    offset: np.ndarray | None = None,
 ) -> Any:
-    """Poisson counts ``X = Poisson(exp(W z + b))`` as a float32 CSR matrix."""
+    """
+    Poisson counts ``X = Poisson(exp(W z + b + offset))`` as a float32 CSR matrix; ``offset``
+    is an optional per-cell gene-level log-rate term (``(n_cells, n_genes)``).
+    """
     from scipy import sparse
 
-    rate = np.exp(np.clip(z @ W.T + b, -10.0, 8.0))
+    log_rate = z @ W.T + b
+    if offset is not None:
+        log_rate = log_rate + offset
+    rate = np.exp(np.clip(log_rate, -10.0, 8.0))
     return sparse.csr_matrix(rng.poisson(rate).astype(np.float32))
+
+
+def _chimera_offsets(
+    rng: np.random.Generator,
+    states: list[str],
+    novel_chimera: dict[str, tuple[str, str, int]],
+    novel_states: list[str],
+    mu: np.ndarray,
+    W: np.ndarray | None,
+) -> np.ndarray | None:
+    """
+    Per-state gene-level log-rate offsets ``(n_states, n_genes)`` for the chimera scenario:
+    state ``s`` keeps anchor ``a``'s latent centroid (set by the caller) and, on ``n`` seeded
+    genes, takes state ``c``'s expected log-rate, ``W[G] (mu_c - mu_a)``. ``None`` without
+    chimeras.
+    """
+    if not novel_chimera:
+        return None
+    if W is None:
+        raise ValueError("novel_chimera needs n_genes > 0: the difference lives in the counts")
+    M = np.zeros((len(states), W.shape[0]))
+    for s, (a, c, n) in novel_chimera.items():
+        if s not in novel_states:
+            raise ValueError(f"novel_chimera state {s!r} must be in novel_states")
+        for anchor in (a, c):
+            if anchor not in states or anchor in novel_states:
+                raise ValueError(f"novel_chimera anchors of {s!r} must be reference states")
+        if a == c:
+            raise ValueError(f"novel_chimera anchors of {s!r} must differ")
+        n = int(n)
+        if n < 1 or n > W.shape[0]:
+            raise ValueError(f"novel_chimera gene count of {s!r} must be in 1..{W.shape[0]}")
+        genes = rng.choice(W.shape[0], size=n, replace=False)
+        M[states.index(s), genes] = W[genes] @ (mu[states.index(c)] - mu[states.index(a)])
+    return M
 
 
 def simulate_reference(
@@ -195,7 +240,8 @@ def simulate_reference(
             else rng.normal(0.0, 0.5 / np.sqrt(n_latent), size=(n_genes, n_latent))
         )
         b = _shared["b"] if _shared and "b" in _shared else rng.normal(1.0, 0.5, size=n_genes)
-        X = _counts_from_latent(rng, z, W, b)
+        M = _shared.get("M") if _shared else None
+        X = _counts_from_latent(rng, z, W, b, offset=None if M is None else M[state_idx])
         var = pd.DataFrame(index=pd.Index([f"gene{i}" for i in range(n_genes)], name="gene"))
     else:
         X = np.empty((n_cells, 0), dtype=np.float32)
@@ -246,6 +292,7 @@ def simulate_transport(
     spread_states: dict[str, float] | None = None,
     novel_states: list[str] | None = None,
     novel_between: dict[str, tuple[str, str, float]] | None = None,
+    novel_chimera: dict[str, tuple[str, str, int]] | None = None,
     absent_states: list[str] | None = None,
     minority_states: dict[str, float] | None = None,
     abundance_change: dict[str, float] | None = None,
@@ -278,6 +325,15 @@ def simulate_transport(
         of the way from state ``a``'s centroid to state ``b``'s instead of at random, so its
         cells sit between two reference states and are absorbed by them (``t`` near 0 puts it
         on ``a``). Each key must be in ``novel_states``; ``a`` and ``b`` must not.
+    novel_chimera
+        ``{novel_state: (a, c, n_genes)}``: the withheld state takes state ``a``'s latent
+        centroid exactly, so no latent coordinate separates it from ``a``, and on ``n_genes``
+        seeded genes its expected log-rate is state ``c``'s instead (``W[G] (mu_c - mu_a)``
+        added to the counts' log-rate). The case of a population that shares its neighbour's
+        programs but differs in a few marker genes (CD4 T cells withheld from a reference
+        that keeps Tregs); a mapper that sees only counts tends to absorb it. Needs
+        ``n_genes > 0``; each key must be in ``novel_states``; ``a`` and ``c`` must be distinct
+        reference states.
     state_anisotropy, anisotropic_dims
         Elongated states (see :func:`simulate_reference`); reference and query share the
         directions.
@@ -315,9 +371,12 @@ def simulate_transport(
     minority_states = dict(minority_states or {})
     abundance_change = dict(abundance_change or {})
     novel_between = dict(novel_between or {})
+    novel_chimera = dict(novel_chimera or {})
     for s in [*shifted_states, *novel_states, *absent_states, *minority_states, *abundance_change]:
         if s not in states:
             raise KeyError(f"unknown state {s!r}")
+    if set(novel_between) & set(novel_chimera):
+        raise ValueError("a novel state is placed by novel_between or novel_chimera, not both")
     mu = rng.normal(0.0, state_separation, size=(n_states, n_latent))
     for s, (a, b, t) in novel_between.items():
         if s not in novel_states:
@@ -327,12 +386,18 @@ def simulate_transport(
         mu[states.index(s)] = (1.0 - float(t)) * mu[states.index(a)] + float(t) * mu[
             states.index(b)
         ]
+    for s, (a, _, _) in novel_chimera.items():
+        if s in states and a in states:
+            mu[states.index(s)] = mu[states.index(a)]
     shared: dict[str, Any] = {"mu": mu}
     if state_anisotropy != 1.0:
         shared["A"] = _anisotropy(seed, n_states, n_latent, state_anisotropy, anisotropic_dims)
     if n_genes > 0:
         shared["W"] = rng.normal(0.0, 0.5 / np.sqrt(n_latent), size=(n_genes, n_latent))
         shared["b"] = rng.normal(1.0, 0.5, size=n_genes)
+    M = _chimera_offsets(rng, states, novel_chimera, novel_states, mu, shared.get("W"))
+    if M is not None:
+        shared["M"] = M
 
     ref_donors = [f"D{i:02d}" for i in range(n_ref_groups)]
     ref_drop: dict[str, list[str]] = {d: list(novel_states) for d in ref_donors}
@@ -396,7 +461,13 @@ def simulate_transport(
             Z[sel] = centre + float(factor) * (Z[sel] - centre)
     query.obsm[latent_key] = Z.astype(np.float32)
     if n_genes > 0:
-        query.X = _counts_from_latent(np.random.default_rng(seed + 3), Z, shared["W"], shared["b"])
+        query.X = _counts_from_latent(
+            np.random.default_rng(seed + 3),
+            Z,
+            shared["W"],
+            shared["b"],
+            offset=None if M is None else M[code],
+        )
     # drop the reference-only categories from the query's categorical so tables stay honest
     query.obs["cell_state"] = query.obs["cell_state"].cat.remove_unused_categories()
 
