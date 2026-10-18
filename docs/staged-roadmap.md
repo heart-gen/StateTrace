@@ -7,21 +7,23 @@ timeline (`TIMELINE.md`); this page tracks what the *software* must deliver for 
 what evidence closes the stage, and which inputs from the PI it waits on. Update the summary
 table and the milestone log when a stage changes state.
 
-Stage 7 is a planned spatial extension with a separate gate and an unassigned schedule; it is
-not a requirement for the twelve-week core release.
+Stage 6 is the planned spatial extension (StateTrace-Spatial, version 0.5.0) with its own gate and
+an unassigned schedule; it is not required for the manuscript submission. The version cited at
+submission is the Stage 5 manuscript release tag (0.4.x), not the 1.0.0 stable release that closes
+Stage 7, so Stages 6 and 7 can follow the submission without moving it.
 
 ## Summary
 
 | Stage | Status | Weeks | Deliverables | Promotion gate | Required evidence | Version | Last commit |
 |---|---|---|---|---|---|---|---|
-| 0 | complete | before 1 | Package, grouped validation (donor, study), reproducibility categories, `Predictions`, kNN baseline, frozen format, transport route and gating, report, feature harmonisation | Fresh install, silent import with torch and scvi blocked, full test suite, docs build | CI log, `tests/test_imports.py`, docs build | 0.1.0 (untagged) | `8dcf9bb` |
+| 0 | complete | before 1 | Package, grouped validation (donor, study), reproducibility categories, `Predictions`, kNN baseline, frozen format, transport route and gating, report, feature harmonisation | Fresh install, silent import with torch and scvi blocked, full test suite, docs build | CI log, `tests/test_imports.py`, docs build | 0.1.0 (tagged 2026-10-02 with Stage 1) | `8dcf9bb` |
 | 1 | G0 passed 2026-10-02 | 1 - 2 | Two coordinate systems: frozen expression space with per-donor offsets (done); identity-loss status; local support in the tool's latent (done); novelty scores and calibrated thresholds (done); corrected simulator (done); tag v0.1.0 | **G0** on the full simulation grid: (a) cell accuracy within 2 points of scANVI / scPoli, (b) two arms: the predeclared out-of-reference rule beats the mapper's uncertainty at matched donor-calibrated false rate, and the absorbing state shows a high frozen-expression shift, (c) >= 90 % planted statuses correct, shift evidence scored separately | `00_gates/_m/G0.md` with both SHAs; grid summary CSV; smoke and rerun reports | 0.1.0 tag, 0.1.1 fixes | `841f1dc` |
-| 2 | planned | 3 - 4 | Backend coverage: Symphony adapter (R -> CSV -> `from_symphony`), scConform bridge, scANVI `AnnDataBackend` with per-fold latent refit, Azimuth adapter if signed off; donor-support restriction runs | **G1** semi-synthetic perturbations on the NVU reference; **U1** decided (does the problem exist) | `G1.md`, `U1.md`; withheld-state AUROC table; reproducibility vs donor count; backend status agreement >= 0.8 | 0.2.0 | |
+| 2 | G1 (d) FAIL accepted 2026-10-18 | 3 - 4 | Backend coverage: Symphony adapter (R -> CSV -> `from_symphony`, done), study-unit novelty null, expression-space reproducibility, held-out caution calibration, kNN out-of-reference score, support-deficit score (sensitivity only); scANVI `AnnDataBackend` with per-fold refit and the scConform / Azimuth bridges move to Stage 3 | **G1** semi-synthetic perturbations on Stephenson et al. 2021 PBMC; **U1** decided (does the problem exist) | `G1.md` (FAIL on withheld-state detection, 0.652 vs 0.722; `insufficient` and backend agreement pass; the failure accepted as a stated limitation, benchmark `GATES.md` 2026-10-18), `U1.md` pending | 0.2.0 | `9b6e0a7` |
 | 3 | planned | 4 - 6 | Real-data robustness: study-level holdout on real studies; test of the per-donor offset assumption under a real platform effect; group-aware calibration tables; feature-retention reporting | **G2** PBMC and HLCA, **U2** decided (beats simple baselines at predicting replication); **G3** brain | `G2.md`, `U2.md`, `G3.md`; scIB reference table; calibration figure | 0.2.x, 0.3.0 | |
 | 4 | planned | 7 - 8 | Inference validity: downstream-validity helpers (type I error under permuted null, FDR, power, effect-size bias, replication summaries); gated versus ungated pseudobulk and differential-abundance pipeline | **G4** NVU -> SCORCH application and validity layer; **U3** decided (supported states replicate, gating controls type I error) | `G4.md`, `U3.md`; error-rate and replication tables | 0.3.0 | |
-| 5 | planned | 9 | Generalisation: ortholog `FeatureMap` on real BioMart tables; retention in the report; sensitivity analyses (thresholds, reduced features); optional cell-level frozen-expression displacement | **G5** organoid and cross-species student stages; **U4** decided (>= 3 systems, >= 3 backends) | `G5.md`, `U4.md`; frozen result set; manuscript release tag | 0.4.0 | |
-| 6 | planned | 10 - 12 | Usability and release: tutorial (two h5ads to a transport report), docs and API fixes from the usability test, PyPI and conda recipe, Zenodo DOI, clean-environment reproduction, final tag cited in the paper | **U5** a non-author produces and interprets a transport report from the docs; then one outside collaborator | `U5.md`; tutorial runtime; `env/environment.lock.txt`; Zenodo record | 1.0.0 | |
-| 7 | planned | unassigned; after core release by default | StateTrace-Spatial: boundary stability, spatial correspondence, transcript reassignment, donor/state summaries; optional CellART adapter | **G6-Spatial** (proposed): distinguish biological shift from segmentation-induced artificial novelty, with reference sensitivity assessed separately | Corruption benchmark, matched-cell and correspondence-component tables, donor/state effect sizes, independent validation, provenance and gate report | TBD | |
+| 5 | planned | 9 | Generalisation: ortholog `FeatureMap` on real BioMart tables; retention in the report; sensitivity analyses (thresholds, reduced features); optional cell-level frozen-expression displacement; **manuscript release tag, the version cited at submission** | **G5** organoid and cross-species application stages; **U4** decided (>= 3 systems, >= 3 backends) | `G5.md`, `U4.md`; frozen result set; manuscript release tag | 0.4.0 | |
+| 6 | planned | unassigned; not a submission requirement | StateTrace-Spatial: boundary stability, spatial correspondence, transcript reassignment, donor/state summaries; optional CellART adapter | **G6-Spatial** (proposed): distinguish biological shift from segmentation-induced artificial novelty, with reference sensitivity assessed separately | Corruption benchmark, matched-cell and correspondence-component tables, donor/state effect sizes, independent validation, provenance and gate report | 0.5.0 | |
+| 7 | planned | 10 - 12 for U5 and the submission release; 1.0.0 after Stage 6 | Usability and stable release: tutorial (two h5ads to a transport report), docs and API fixes from the usability test, PyPI and conda recipe, Zenodo DOI, clean-environment reproduction of the submission version; the stable tag once Stage 6 has closed | **U5** a non-author produces and interprets a transport report from the docs; then one outside collaborator; v1.0 release criteria ({doc}`roadmap`) | `U5.md`; tutorial runtime; `env/environment.lock.txt`; Zenodo record | 1.0.0 | |
 
 ## Promotion rule
 
@@ -86,22 +88,22 @@ donor with the reference, and `simulate_transport` gained a spread-only scenario
 adds scXMatch and the E-distance as shift comparators (G1 reported, G2 gated) with monotonicity
 and subsampling-robustness metrics.
 
-Blocking inputs, by the week they are needed (`INPUTS_NEEDED.md` in the benchmark repository
-has the full list):
+2026-10-18: G1 was evaluated twice on real data (Stephenson et al. 2021 PBMC). The first run (0.1.0)
+failed on detection and on backend agreement; the defaults changed in 0.2.0 (study-unit novelty
+null, expression-space reproducibility, held-out caution, kNN out-of-reference score, every choice
+made on the simulator) brought agreement to 0.843 and `insufficient` recall to 1.000, but
+withheld-state detection stayed at 0.652 against 0.722: a population the mappers place between two
+reference states at within-state distances is invisible to every distance score, and the
+support-deficit score (`ood_score="support"`) did not meet its pre-registered replacement rule. The
+PI accepted the failure as a stated limitation rather than change the software for the gate; the
+benchmark's stages 03 and 04 open on this code and state the limitation. The benchmark's
+predeclared real-data out-of-reference rule fired on the same records (held-out studies of intact
+states exceed 10 % out-of-reference under q95), so real-data stages use the held-out 99th percentile.
 
-| Needed by | Input from the PI | Blocks |
-|---|---|---|
-| week 1 | Sign-off of thresholds, scenarios, comparator set and gate tolerances (`predeclared: false` in `thresholds.yaml`, `utility_gate.yaml`) | G0 evaluation |
-| week 1 | Decision on the identity-loss case (new status, or fold the neighbour's contamination evidence into the absent state's row) | Stage 1 vocabulary, manuscript table 1 |
-| week 1 | scConform (R dependency) and Azimuth in or out | Stage 2 scope |
-| week 3 | NVU control reference (`aim1_reference_annotated.h5ad`); Bridges-2 GPU allocation | G1, U1, and everything after |
-| week 3 | PBMCBench accession and donor / protocol split | G2 |
-| week 5 | HLCA query studies and annotation level; SCORCH macaque path | G2, G5 |
-| week 5 | Replication definitions per public system (which cohort replicates, which association) | U2, U3 |
-| week 5 | Student assignments for the organoid and cross-species stages | G5 |
-| week 6 | Quest account or a copy of SEA-AD microglia-immune on Bridges-2; reference choice (Tran vs HBCA) and scoring level | G3 |
-| week 10 | A non-author tester, then an outside collaborator with two h5ads | U5 |
-| week 10 | Author list, affiliations, declarations; fallback venue if U2 fails | Submission |
+Inputs this software waits on from the benchmark side are listed there (`INPUTS_NEEDED.md`,
+`TIMELINE.md`); the ones that gate software work are the comparator sign-offs (done), the
+reference objects of the application stages, the replication definitions for U2 / U3, and the
+testers for U5.
 
 ## Stage 1: two coordinate systems and G0
 
@@ -146,9 +148,9 @@ data with a shift diagnostic that does not depend on the mapper's latent.
 - [x] Novelty decision rule from the withheld-state curve (`ood_rule`; curve in `simulation.withheld_state`; centroid q95 predeclared 2026-09-30)
 - [x] kNN novelty score, support calibration, joint score, calibrated population call (`ood_score`, `support_calibration`, `population_calibration`)
 - [x] Labels-only predictions path (`confidence_source`)
-- [x] Full grid, first run: 450 comparator cells plus the withheld-state curve with the mappers on the local TITAN RTX (2026-09-30 21:07 to 2026-10-01 07:22, `01_simulation/_h/local_grid.sh`); G0 failed, see the milestone log
+- [x] Full grid, first run: 450 comparator cells plus the withheld-state curve with the mappers on a local GPU (2026-09-30 to 2026-10-01, `01_simulation/_h/local_grid.sh`); G0 failed, see the milestone log
 - [x] Full grid, reruns after the per-donor latent offset fix and the expression-arm amendment (local, same runner): second run 2026-10-01 08:13 to 18:46 (false rate 0.098 from a true-label null), third run 2026-10-01 19:17 to 2026-10-02 05:57 with the assigned-label null and geometric-median offsets
-- [x] `00_gates/_m/G0.md`: **PASS** 2026-10-02 on `ef0560a`, recorded in `configs/gates.yaml` (`def81ff`); tag v0.1.0; wheel built with `uv build` for Bridges-2
+- [x] `00_gates/_m/G0.md`: **PASS** 2026-10-02 on `ef0560a`, recorded in `configs/gates.yaml` (`def81ff`); tag v0.1.0; wheel built with `uv build` for the cluster environment
 
 ### Commands
 
@@ -209,7 +211,8 @@ negative result; Stage 3 does not start.
 
 ### Expected artifacts
 
-`02_perturbation/_m/`, `00_gates/_m/G1.md`, `00_gates/_m/U1.md`, tag v0.2.0.
+`02_perturbation/_m/`, `00_gates/_m/G1.md` (FAIL on detection, accepted 2026-10-18),
+`00_gates/_m/U1.md`, tag v0.2.0.
 
 ## Stage 3: real-data robustness, G2 and G3
 
@@ -258,8 +261,9 @@ replicate in the independent cohort.
   bias for gated versus ungated pseudobulk and differential-abundance analyses; replication
   summaries at the state level.
 - The decision-impact rate and number needed to flag, exported per system for `UTILITY.md`.
-- The NVU -> SCORCH application run through `validate` -> `validate_transport` -> `report`
-  with no project-specific code in the software.
+- The biological application (a frozen brain reference transported into an independent disease
+  cohort) run through `validate` -> `validate_transport` -> `report` with no project-specific code
+  in the software.
 
 ### Promotion gate
 
@@ -270,7 +274,7 @@ I error. If U3 fails, the paper is a validation benchmark rather than an inferen
 
 ### Expected artifacts
 
-`06_nvu/_m/`, `07_inference_validity/_m/`, `G4.md`, `U3.md`, tag v0.3.0.
+`06_nvu_hiv_oud/_m/`, `07_inference_validity/_m/`, `G4.md`, `U3.md`, tag v0.3.0.
 
 ## Stage 5: generalisation and G5
 
@@ -293,36 +297,13 @@ paper reports.
 ### Promotion gate
 
 G5 as G2 with feature-retention reporting. U4: advantage in >= 3 systems and >= 3 backends in
->= 75 % of settings.
+>= 75 % of settings. The manuscript release tag (0.4.x) is the version cited at submission.
 
 ### Expected artifacts
 
 `08_organoid_scz/_m/`, `09_cross_species/_m/`, `G5.md`, `U4.md`, the manuscript release tag.
 
-## Stage 6: usability and release
-
-### Objective
-
-A non-author reaches a transport report from two h5ads and the docs, and the paper cites a
-tagged, archived, installable release.
-
-### Deliverables
-
-- Tutorial: two h5ads to a transport report, under 15 public API calls, minutes on a
-  workstation.
-- Docs and API fixes from the usability test; every public function documented.
-- PyPI release and a conda-forge recipe; CI on every supported Python; Read the Docs build.
-- Zenodo DOI; `CITATION.cff` completed; clean-environment reproduction of the frozen result
-  set with `env/environment.lock.txt`.
-- Final tag referenced in the manuscript.
-
-### Promotion gate
-
-U5: a non-author produces and interprets a transport report from the docs alone; then one
-outside collaborator does the same on their own data. Release criteria for v1.0 in
-{doc}`roadmap`.
-
-## Stage 7: StateTrace-Spatial — distinguish mapping failure from segmentation failure
+## Stage 6: StateTrace-Spatial (0.5.0) — distinguish mapping failure from segmentation failure
 
 ### Objective
 
@@ -368,6 +349,31 @@ reference-sensitivity results, an independently validated tissue example, and so
 benchmark, reconstruction and reference provenance. Register paths and gate configuration in
 the benchmark repository before implementation; these artifacts do not exist yet.
 
+## Stage 7: usability and stable release (1.0.0)
+
+### Objective
+
+A non-author reaches a transport report from two h5ads and the docs, the paper cites a tagged,
+archived, installable release (the Stage 5 manuscript tag), and the stable 1.0.0 closes the core
+roadmap after Stage 6.
+
+### Deliverables
+
+- Tutorial: two h5ads to a transport report, under 15 public API calls, minutes on a
+  workstation.
+- Docs and API fixes from the usability test; every public function documented.
+- PyPI release and a conda-forge recipe; CI on every supported Python; Read the Docs build.
+- Zenodo DOI; `CITATION.cff` completed; clean-environment reproduction of the frozen result
+  set with `env/environment.lock.txt`.
+- Final submission tag referenced in the manuscript (0.4.x; Stage 5), archived on Zenodo.
+- Stable 1.0.0 tag after Stage 6 has closed; not a submission requirement.
+
+### Promotion gate
+
+U5: a non-author produces and interprets a transport report from the docs alone; then one
+outside collaborator does the same on their own data. Release criteria for v1.0 in
+{doc}`roadmap`.
+
 ## Schedule
 
 Week 1 is 2026-09-29 to 2026-10-05; week 12 ends 2026-12-21. The benchmark repository's
@@ -378,19 +384,19 @@ column and the decision points.
 |---|---|---|---|---|
 | 1 | Sep 29 - Oct 5 | Expression space (done); identity-loss status; local support; tag v0.1.0 | PI signs thresholds, comparator set, identity-loss design | 1 |
 | 2 | Oct 6 - 12 | Novelty decision rule; labels-only path; fixes from the grid; scConform bridge | **G0** on the full grid | 1 |
-| 3 | Oct 13 - 19 | v0.1.1; Symphony adapter | PBMCBench fetched; **G1** starts when the NVU reference exists; **U1** | 2 |
-| 4 | Oct 20 - 26 | v0.2.0: scANVI per-fold backend; group-aware calibration | G1 closes | 2 |
-| 5 | Oct 27 - Nov 2 | Offset-assumption test on PBMCBench; study-level holdout on real studies | **G2**, **U2**; students start | 3 |
+| 3 | Oct 13 - 19 | Symphony adapter; G1 fixes chosen on the simulator (study-unit null, expression-space reproducibility, kNN score) | Stephenson 2021 PBMC fetched; **G1** evaluated twice, FAIL on detection accepted 2026-10-18; **U1** | 2 |
+| 4 | Oct 20 - 26 | v0.2.0 tagged; group-aware calibration | G1 closed as accepted; stages 03/04 open | 2 |
+| 5 | Oct 27 - Nov 2 | Offset-assumption test on PBMCBench; study-level holdout on real studies; scANVI per-fold backend; scConform and Azimuth bridges | **G2**, **U2** | 3 |
 | 6 | Nov 3 - 9 | Fixes from G2; feature-retention reporting | **G3** | 3 |
-| 7 | Nov 10 - 16 | v0.3.0: downstream-validity helpers | NVU application runs (needs the reference) | 4 |
+| 7 | Nov 10 - 16 | v0.3.0: downstream-validity helpers | Application stage runs (needs its frozen reference) | 4 |
 | 8 | Nov 17 - 23 | Decision-impact export | **G4**, **U3** | 4 |
 | 9 | Nov 24 - 30 | Ortholog maps on real tables; sensitivity hooks; manuscript release tag | **G5**, **U4**; result set frozen | 5 |
-| 10 | Dec 1 - 7 | Tutorial; docs and API fixes from the usability test | **U5** | 6 |
-| 11 | Dec 8 - 14 | PyPI, conda recipe, Zenodo; clean-environment reproduction | | 6 |
-| 12 | Dec 15 - 21 | Final tag cited in the paper | Submission-ready draft | 6 |
+| 10 | Dec 1 - 7 | Tutorial; docs and API fixes from the usability test | **U5** | 7 |
+| 11 | Dec 8 - 14 | PyPI, conda recipe, Zenodo; clean-environment reproduction | | 7 |
+| 12 | Dec 15 - 21 | Submission tag (0.4.x) cited in the paper; 1.0.0 follows Stage 6 | Submission-ready draft | 7 |
 
-Critical path: the NVU reference (week 3) gates G1 and every utility gate after it; if it slips,
-Stage 2 finishes on simulation and the public systems, and Stage 4 slips one-for-one. U1 (week
+Critical path: the application stage's frozen reference (week 7) gates G4 and U3; if it slips,
+Stage 4 slips one-for-one while Stages 2 and 3 finish on the public systems. U1 (week
 3) and U2 (week 5) are the real go/no-go points and are decided before the expensive real-data
 stages run.
 
@@ -409,4 +415,6 @@ stages run.
 | 2026-10-01 | 1 | Per-donor latent offsets for query and null (surgery places each query donor with its own displacement); expression arm amended to a discrimination criterion, recorded in `GATES.md`; rerun launched | `f1b2c65` | `833c470` | `GATES.md` Amendments |
 | 2026-10-01 | 1 | Held-out null built from assigned labels (as the query is); geometric-median latent offsets; raw and residual displacement reported; per-state AUROC made the primary expression-arm form with the within-run stress test secondary; (a) tolerance 0.03 (both in `GATES.md`, Amendments) | `ef0560a` | `15bc438` | `00_gates/_m/G0_2026-10-01_second_run.md` |
 | 2026-10-02 | 1 | Third full stage-01 run (510 cells, 10.7 h local GPU): **G0 PASS**. Pooled false rate 0.062 (scANVI 0.047, scPoli 0.078); latent-arm power margins 0.46 and 0.19; per-state expression AUROC 0.92 and 0.88; truth-category recovery 0.97 and 0.94; accuracy gap 2.3 points. v0.1.0 tagged; stage 02 unlocked | `ef0560a` (tag v0.1.0) | `def81ff` | `00_gates/_m/G0.md`, `configs/gates.yaml` |
-| 2026-10-09 | 7 | Added planned StateTrace-Spatial extension: boundary stability, optional CellART adapter, controlled segmentation-error benchmark and proposed G6-Spatial; schedule/version unassigned, no implementation or benchmark claim | pending | not registered | `docs/spatial-roadmap.md` |
+| 2026-10-09 | 6 | Added planned StateTrace-Spatial extension: boundary stability, optional CellART adapter, controlled segmentation-error benchmark and proposed G6-Spatial; schedule/version unassigned, no implementation or benchmark claim | pending | not registered | `docs/spatial-roadmap.md` |
+| 2026-10-18 | 2 | G1 rerun #2 on `07def17`: detection 0.652 vs 0.722 FAIL, agreement 0.843 and `insufficient` 1.000 pass; support-deficit score added and rejected by its pre-registered rule; failure accepted by the PI as a stated limitation; benchmark stages 03/04 open | `9b6e0a7` | `455959b` | benchmark `00_gates/_m/G1.md`, `reports/2026-10-17_ood_score_rule_support.md` |
+| 2026-10-18 | 6, 7 | Stages 6 and 7 swapped: StateTrace-Spatial is Stage 6 at 0.5.0 (unscheduled, not a submission requirement); usability and the stable 1.0.0 release are Stage 7; the submission cites the Stage 5 manuscript tag | | | this page, `docs/roadmap.md`, `docs/spatial-roadmap.md` |

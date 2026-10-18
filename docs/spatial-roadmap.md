@@ -1,6 +1,6 @@
 # StateTrace-Spatial: boundary stability
 
-Planned Stage 7; no spatial API, CellART integration or benchmark result is claimed here.
+Planned Stage 6 (version 0.5.0; not a submission requirement); no spatial API, CellART integration or benchmark result is claimed here.
 See {doc}`staged-roadmap` for dependencies and the proposed G6-Spatial gate.
 
 ## 1. Biological Claim
@@ -224,4 +224,4 @@ missing uncertainty and frozen-reference invariance; tests must not download rea
 The benchmark repository owns real-data execution, corruption manifests, numeric promotion
 criteria and the proposed G6-Spatial report. The manuscript repository owns eventual Methods,
 Results and figures. This software plan does not register a gate in either repository or
-commit Stage 7 to the core release date.
+commit Stage 6 to the submission date.

@@ -7,22 +7,24 @@ it is comparable to or better than the main comparators on the previous layer's 
 
 | Version | Content | Benchmark gate |
 |---|---|---|
-| 0.1 | `StateReference`, grouped holdout (donor, study), random-split control, reproducibility categories, frozen format, kNN baseline | G0 simulation parity |
-| 0.2 | `Predictions` adapters (scPoli, scANVI, Symphony, Azimuth, CellTypist), `validate_transport`, shift diagnostics, two-sample engines (E-distance; scXMatch when installed) reported next to the status, inference gating, `compare_backends`, abundance and pseudobulk, transport report, feature harmonisation | G1 semi-synthetic perturbations on real data |
+| 0.1 | `StateReference`, grouped holdout (donor, study), random-split control, reproducibility categories, frozen format, kNN baseline, `Predictions` adapters (scPoli, scANVI, Symphony, Azimuth, CellTypist), `validate_transport`, shift and novelty diagnostics, inference gating, `compare_backends`, abundance and pseudobulk, transport report, feature harmonisation | G0 simulation parity (passed 2026-10-02) |
+| 0.2 | Frozen expression space and per-donor offsets, calibrated novelty stack (kNN out-of-reference score, support and population calibration, study-unit null), expression-space reproducibility, held-out caution calibration, two-sample engines (E-distance; scXMatch when installed) reported next to the status, frozen format 4 | G1 semi-synthetic perturbations on real data (detection failed and was accepted as a stated limitation, 2026-10-18) |
 | 0.3 | scANVI `AnnDataBackend` with per-fold refit, group-aware calibration tables, downstream-validity helpers (type I error / replication summaries) | G2 public cross-cohort (PBMC, HLCA) |
 | 0.4 | hierarchical states, plotting, CLI | G3 brain and G4 application |
-| TBD (Stage 7) | StateTrace-Spatial: boundary stability and segmentation sensitivity; optional CellART output adapter | G6-Spatial (proposed; criteria to be registered) |
+| 0.5 (Stage 6) | StateTrace-Spatial: boundary stability and segmentation sensitivity; optional CellART output adapter; not a submission requirement | G6-Spatial (proposed; criteria to be registered) |
+| 1.0 (Stage 7) | Usability and stable release: tutorial, docs and API fixes from the usability test, PyPI and conda, Zenodo | U5 usability (non-author, then an outside collaborator) |
 | later | genetics annotation export and multi-omic references | — |
 
 ## Planned: StateTrace-Spatial
 
-Stage 7 adds the question **is the mapped-state conclusion robust to how the spatial cell
-was reconstructed?** It compares native, deliberately corrupted and alternative cell
+Stage 6 (version 0.5.0) adds the question **is the mapped-state conclusion robust to how the
+spatial cell was reconstructed?** It compares native, deliberately corrupted and alternative cell
 boundaries, measuring transcript reassignment, label changes and changes in novelty,
 reference-frozen displacement and uncertainty. CellART is an optional preprocessing
 perturbation, not ground truth. See {doc}`spatial-roadmap` for the benchmark design, donor-level
-evaluation, reference-sensitivity controls and implementation scope. Its schedule and version
-are unassigned; it is not a v1.0 release requirement.
+evaluation, reference-sensitivity controls and implementation scope. Its schedule is unassigned;
+it is not a submission requirement and precedes the 1.0 stable release (Stage 7) in version number
+only. The manuscript cites the Stage 5 release tag.
 
 ## Cell-level frozen-expression evidence
 
