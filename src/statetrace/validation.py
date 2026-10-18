@@ -844,7 +844,11 @@ def run_validation(
                 min_groups=config.thresholds.min_groups,
             )
         _, geometry = novelty.state_geometry(X, state_codes, len(states))
-        calibration = novelty.holdout_distance_calibration(evidence, geometry, states)
+        # one neighbour's vote, the resolution of the support behind the support deficit
+        k = backend.n_neighbors if is_array and hasattr(backend, "neighbor_codes") else 15
+        calibration = novelty.holdout_distance_calibration(
+            evidence, geometry, states, support_step=1.0 / float(k)
+        )
         calibration["calibration_unit"] = units
     result = summarize_holdout(
         cp,

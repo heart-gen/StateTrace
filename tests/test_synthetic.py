@@ -130,3 +130,47 @@ def test_anisotropic_states_and_a_withheld_state_between_two():
         simulate_transport(
             n_states=4, novel_states=["S2", "S3"], novel_between={"S3": ("S2", "S1", 0.5)}
         )
+
+
+def test_chimera_state_shares_its_anchor_latent_and_differs_in_a_few_genes():
+    ref, qry, truth = simulate_transport(
+        n_ref_groups=4,
+        n_query_groups=3,
+        n_states=4,
+        n_cells_per_group=300,
+        n_latent=8,
+        n_genes=100,
+        cohort_effect=0.0,
+        donor_effect=0.1,
+        novel_states=["S3"],
+        novel_chimera={"S3": ("S0", "S1", 10)},
+        seed=2,
+    )
+    assert truth.loc["S3", "truth"] == "novel" and "S3" not in set(ref.obs["cell_state"])
+    zq, sq = qry.obsm["X_latent"], qry.obs["cell_state"].astype(str).to_numpy()
+    zr, sr = ref.obsm["X_latent"], ref.obs["cell_state"].astype(str).to_numpy()
+    # the latent centroid is the anchor's (within the donor noise)
+    assert np.linalg.norm(zq[sq == "S3"].mean(axis=0) - zr[sr == "S0"].mean(axis=0)) < 0.5
+    # a handful of genes differ in mean expression from S0, the rest do not
+    X = np.asarray(qry.X.todense())
+    lib = X.sum(axis=1, keepdims=True)
+    logn = np.log1p(X / lib * 1e4)
+    diff = np.abs(logn[sq == "S3"].mean(axis=0) - logn[sq == "S0"].mean(axis=0))
+    top = np.sort(diff)[::-1]
+    assert top[0] > 2 * np.median(diff) and (diff > top[9] * 0.5).sum() >= 10
+    with pytest.raises(ValueError, match="n_genes > 0"):
+        simulate_transport(
+            n_states=4, novel_states=["S3"], novel_chimera={"S3": ("S0", "S1", 5)}, n_genes=0
+        )
+    with pytest.raises(ValueError, match="must differ"):
+        simulate_transport(
+            n_states=4, novel_states=["S3"], novel_chimera={"S3": ("S0", "S0", 5)}, n_genes=50
+        )
+    with pytest.raises(ValueError, match="not both"):
+        simulate_transport(
+            n_states=4,
+            novel_states=["S3"],
+            novel_between={"S3": ("S0", "S1", 0.5)},
+            novel_chimera={"S3": ("S0", "S1", 5)},
+            n_genes=50,
+        )

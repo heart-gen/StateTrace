@@ -882,3 +882,60 @@ def test_holdout_caution_spares_states_whose_reference_donors_are_as_mixed():
         assert (st.loc[caution, "caution_reasons"] != "").all()
         assert (st.loc[~caution, "caution_reasons"] == "").all()
     assert n_fixed >= 5 and n_holdout <= 1, (n_fixed, n_holdout)
+
+
+def test_support_scores_see_a_withheld_state_absorbed_between_two_states():
+    from sklearn.metrics import roc_auc_score
+
+    # the withheld state sits halfway between S2 and S3: no farther from the reference than
+    # their own cells, but in a neighbourhood neither state owns
+    ref_adata, qry, _ = simulate_transport(
+        n_ref_groups=8,
+        n_query_groups=6,
+        n_states=6,
+        n_cells_per_group=300,
+        n_latent=10,
+        cohort_effect=0.3,
+        novel_states=["S5"],
+        novel_between={"S5": ("S2", "S3", 0.5)},
+        seed=0,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = Reference(ref_adata.copy(), **REF_KW).fit()
+        ref.leave_one_group_out()
+    cal = ref.distance_calibration_
+    for col in ("support_mean_holdout", "support_sd_holdout", "knn_support_q95_holdout"):
+        assert col in cal and np.isfinite(cal[col]).all()
+    novel = qry.obs["cell_state"].astype(str).to_numpy() == "S5"
+    routes = {}
+    for score in ("knn", "support", "knn_support"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            routes[score] = validate_transport(
+                ref,
+                qry,
+                group_key="donor_id",
+                query_state_key="cell_state",
+                config=TransportConfig(ood_score=score, ood_rule="quantile", ood_quantile=0.95),
+            )
+    cells = routes["knn_support"].cells.reindex(qry.obs_names)
+    auc = {
+        col: roc_auc_score(novel, cells[col].fillna(cells[col].max()))
+        for col in ("knn_novelty", "support_novelty", "knn_support_novelty")
+    }
+    assert auc["support_novelty"] > 0.75
+    assert auc["knn_support_novelty"] >= max(auc["knn_novelty"], auc["support_novelty"]) - 0.05
+    for score, r in routes.items():
+        assert r.reference["ood_score"] == score and not r.reference["ood_fallback"]
+        c = r.cells.reindex(qry.obs_names)
+        pd.testing.assert_series_equal(
+            c["ood_novelty"], c[f"{score}_novelty"], check_names=False
+        )
+        # the quantile rule keeps the false rate on intact cells near the nominal 5 %
+        flagged = (c["category"] == "out_of_reference").to_numpy()
+        assert flagged[~novel].mean() < 0.12
+    # the combined rule gives up no power against the kNN rule on a state the distance sees
+    assert (routes["knn_support"].cells["category"] == "out_of_reference").to_numpy()[
+        novel
+    ].mean() >= (routes["knn"].cells["category"] == "out_of_reference").to_numpy()[novel].mean() - 0.02

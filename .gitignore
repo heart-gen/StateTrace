@@ -147,3 +147,4 @@ docs/api/generated/
 .hypothesis/
 .ruff_cache/
 .claude/
+CLAUDE.md

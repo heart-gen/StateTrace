@@ -136,14 +136,20 @@ class TransportConfig:
     ood_score, ood_rule, ood_z, ood_quantile
         Out-of-reference call. ``ood_score`` is the evidence: ``"knn"`` (default; distance to
         the k-th nearest reference cell), ``"centroid"`` (distance to the state's reference
-        centroid; the 0.1.0 default) or ``"joint"`` (the larger of the two standardised
-        distances). ``ood_rule="z"`` flags a
+        centroid; the 0.1.0 default), ``"joint"`` (the larger of the two standardised
+        distances), ``"support"`` (the standardised deficit of local support: fewer of the
+        cell's reference neighbours carry its state than held-out cells of that state had)
+        or ``"knn_support"`` (the larger of the standardised kNN distance and the support
+        deficit, so a cell is out of reference when it is far from every reference cell or
+        sits in a neighbourhood its state does not own, the signature of a population absorbed
+        between two reference states). ``ood_rule="z"`` flags a
         cell whose standardised score exceeds ``ood_z``; ``"quantile"`` flags one whose score
         exceeds the ``ood_quantile`` (0.95 or 0.99) of the held-out reference cells of its
-        state, which fixes the false rate on new donors at about the nominal level. The
-        ``knn`` and ``joint`` scores and the quantile rule need the held-out calibration from
+        state, which fixes the false rate on new donors at about the nominal level. Every
+        score but ``centroid`` and the quantile rule need the held-out calibration from
         grouped validation; without it the centroid z rule is applied and
-        ``route.reference["ood_rule"]`` says so.
+        ``route.reference["ood_rule"]`` says so. ``cells["ood_novelty"]`` holds the
+        standardised score the call used.
     population_calibration, population_quantile, population_floor
         Threshold on a state's out-of-reference fraction for the ``novel_population`` call and
         the displacement trigger. ``"holdout"`` uses, per state, the larger of
@@ -370,7 +376,8 @@ class TransportRoute:
         Long table, one row per (query group, state) with counts, confidence and recovery.
     cells
         Per query cell: group, state, confidence, margin, support, distance, novelty,
-        knn_distance, knn_novelty, joint_novelty, category.
+        knn_distance, knn_novelty, joint_novelty, support_novelty, knn_support_novelty,
+        ood_novelty (the standardised score the out-of-reference call used), category.
     predictions
         The :class:`~statetrace.predictions.Predictions` that were evaluated.
     expression
@@ -752,6 +759,8 @@ def validate_transport(
     knn_dist = np.full(len(labels), np.nan)
     knn_nov = np.full(len(labels), np.nan)
     joint_nov = np.full(len(labels), np.nan)
+    support_nov = np.full(len(labels), np.nan)
+    knn_support_nov = np.full(len(labels), np.nan)
     ood = np.zeros(len(labels), dtype=bool)
     ood_applied: dict[str, Any] | None = None
     shift = np.full(len(states), np.nan)
@@ -830,6 +839,10 @@ def validate_transport(
             support_source = "latent_knn"
         knn_nov = novelty.knn_novelty(knn_dist, codes, nov_cal, states)
         joint_nov = novelty.joint_novelty(nov, knn_nov)
+        # the support deficit is measured on StateTrace's own neighbour vote, the quantity
+        # the held-out null was built from, whatever the backend reports as support
+        support_nov = novelty.support_novelty(own_support, codes, nov_cal, states)
+        knn_support_nov = novelty.joint_novelty(knn_nov, support_nov)
         ood, ood_applied = novelty.out_of_reference_mask(
             dist,
             nov,
@@ -841,6 +854,7 @@ def validate_transport(
             states=states,
             score=cfg.ood_score,
             knn_distance=knn_dist,
+            support=own_support,
         )
         shift = novelty.centroid_shift(
             Z, codes, reference.centroids_, reference.geometry_, len(states)
@@ -958,10 +972,22 @@ def validate_transport(
             "knn_distance": knn_dist,
             "knn_novelty": knn_nov,
             "joint_novelty": joint_nov,
+            "support_novelty": support_nov,
+            "knn_support_novelty": knn_support_nov,
             "category": category,
         },
         index=pd.Index(query.obs_names.astype(str), name="cell"),
     )
+    # the standardised score behind the out-of-reference call, whichever evidence was applied
+    cells["ood_novelty"] = cells[
+        {
+            "centroid": "novelty",
+            "knn": "knn_novelty",
+            "joint": "joint_novelty",
+            "support": "support_novelty",
+            "knn_support": "knn_support_novelty",
+        }[ood_applied["score"] if ood_applied is not None else "centroid"]
+    ]
     cells["_supported_label"] = supported_label
     if query_state_key is not None:
         cells["true_state"] = query.obs[query_state_key].astype(str).to_numpy()

@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Out-of-reference scores that see a population the reference lacks when it sits *between*
+  reference states rather than away from them (`TransportConfig.ood_score`): `"support"`, the
+  local-support deficit standardised against the held-out support of the assigned state
+  (`novelty.support_novelty`), and `"knn_support"`, the larger of the standardised kNN
+  distance and the support deficit. Benchmark G1 (StateTrace-benchmarking) withheld CD4 T
+  cells from a PBMC reference that keeps Tregs and CD8: every mapper absorbed them into
+  Treg or CD8 with kNN and centroid distances no larger than those states' own held-out
+  cells (AUROC at chance), while their mixed neighbourhoods were visible; the frozen
+  expression space showed the same (CD4 cells sit closer to the Treg centroid than held-out
+  Tregs do), so no distance score, in any space, sees such a state. The score the benchmark
+  predeclares is chosen on the simulator by a rule fixed before it runs, as `knn` was.
+  `distance_calibration` gains `support_mean_holdout`, `support_sd_holdout`,
+  `supportz_q95/q99_holdout` and `knn_support_q95/q99_holdout`; `cells` gains
+  `support_novelty`, `knn_support_novelty` and `ood_novelty` (the standardised score behind
+  the out-of-reference call, so a benchmark ranks what the rule used). Frozen references
+  without the new calibration columns fall back to the centroid z rule for the new scores,
+  and `route.reference["ood_fallback"]` says so.
+- `simulate_transport(novel_chimera=...)`: a withheld state that takes a reference state's
+  latent centroid exactly and, on a few seeded genes, a third state's expression level; the
+  case of a population that shares its neighbour's programs but differs in marker genes.
 - Two-sample engines (`statetrace.twosample`, `TwoSampleConfig`): the E-distance permutation
   test (native; Euclidean, as in pertpy) and Rosenbaum's cross-match test through scXMatch
   (Moeller et al., Bioinformatics 2026, doi:10.1093/bioinformatics/btag706; optional, conda
