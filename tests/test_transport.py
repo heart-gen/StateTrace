@@ -929,13 +929,13 @@ def test_support_scores_see_a_withheld_state_absorbed_between_two_states():
     for score, r in routes.items():
         assert r.reference["ood_score"] == score and not r.reference["ood_fallback"]
         c = r.cells.reindex(qry.obs_names)
-        pd.testing.assert_series_equal(
-            c["ood_novelty"], c[f"{score}_novelty"], check_names=False
-        )
+        pd.testing.assert_series_equal(c["ood_novelty"], c[f"{score}_novelty"], check_names=False)
         # the quantile rule keeps the false rate on intact cells near the nominal 5 %
         flagged = (c["category"] == "out_of_reference").to_numpy()
         assert flagged[~novel].mean() < 0.12
     # the combined rule gives up no power against the kNN rule on a state the distance sees
     assert (routes["knn_support"].cells["category"] == "out_of_reference").to_numpy()[
         novel
-    ].mean() >= (routes["knn"].cells["category"] == "out_of_reference").to_numpy()[novel].mean() - 0.02
+    ].mean() >= (routes["knn"].cells["category"] == "out_of_reference").to_numpy()[
+        novel
+    ].mean() - 0.02

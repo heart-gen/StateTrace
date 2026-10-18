@@ -59,9 +59,9 @@ pip install statetrace
 | Extra | Adds | Needed for |
 |---|---|---|
 | `dev` | pytest, pytest-cov, hypothesis, ruff | tests and linting |
-| `docs` | sphinx, myst-parser, sphinx-rtd-theme | building the docs |
-| `plot` | matplotlib | `statetrace.plotting` (planned) |
-| `scvi` | scvi-tools (pulls in torch) | the scANVI refit-per-fold backend (planned) |
+| `docs` | sphinx, myst-nb, sphinx-rtd-theme | building the docs |
+| `plot` | matplotlib | `statetrace.plotting` (planned: the module raises `NotImplementedError` in 0.2.0; the extra reserves the dependency) |
+| `scvi` | scvi-tools (pulls in torch) | the scANVI refit-per-fold backend (planned: `backends/scvi.py` raises `NotImplementedError` in 0.2.0; the extra reserves the dependency) |
 | `all` | all of the above | |
 
 torch is never a direct dependency; install the build that matches your machine before adding
@@ -154,3 +154,9 @@ This work is supported by the National Institute on Minority Health and Health D
   predictions from an external tool, gating uses group support and confidence alone.
 - The `reproducibility` and `status` rules are descriptive defaults to be predeclared, not
   biological claims.
+- A population that the mapper places *between* two reference states, at distances no larger
+  than those states' own held-out cells, is not seen by any distance score (mapper latent or
+  frozen expression space); only its mixed reference neighbourhood is. Benchmark gate G1
+  (withheld CD4 T cells among Tregs and CD8) failed on this case and the failure is carried as a
+  stated limitation; the support-deficit score (`ood_score="support"`) is a sensitivity
+  diagnostic, not the default. Read "no novel population" together with the unknown fraction.

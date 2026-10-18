@@ -1,6 +1,6 @@
 [project]
 name = "statetrace"
-version = "0.1.0"
+version = "0.2.0"
 description = "Donor-aware framework for building, freezing, validating and transporting cellular-state references across single-cell datasets."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"

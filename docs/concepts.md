@@ -72,6 +72,13 @@ unsupported or novel population, or a state that should not enter downstream inf
 scXMatch's authors name the adjacent question, whether the query was sampled from a subspace
 of the reference, as outside a two-sample test; that is the out-of-reference arm here.
 
+**Blind spot of the out-of-reference arm.** A population placed by the mapper *between* two
+reference states, at distances no larger than those states' own held-out cells, is invisible to
+every distance score in both coordinate systems; only its mixed reference neighbourhood shows
+it. The benchmark's G1 (withheld CD4 T cells among Tregs and CD8) failed on this case and carries
+it as a stated limitation; the support-deficit score (`TransportConfig(ood_score="support")`) is
+a sensitivity diagnostic for it, not the default.
+
 ## Abstention is a result
 
 `unknown` and `out_of_reference` are valid outcomes. Forcing every query cell into the nearest

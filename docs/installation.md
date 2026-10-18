@@ -11,9 +11,9 @@ pip install statetrace
 | Extra | Adds | Needed for |
 |---|---|---|
 | `dev` | pytest, pytest-cov, hypothesis, ruff | running the test suite |
-| `docs` | sphinx, myst-parser, sphinx-rtd-theme | building this documentation |
-| `plot` | matplotlib | `statetrace.plotting` (planned) |
-| `scvi` | scvi-tools (pulls in torch) | the scANVI refit-per-fold backend (planned) |
+| `docs` | sphinx, myst-nb, sphinx-rtd-theme | building this documentation |
+| `plot` | matplotlib | `statetrace.plotting` (planned: the module raises `NotImplementedError` in 0.2.0; the extra reserves the dependency) |
+| `scvi` | scvi-tools (pulls in torch) | the scANVI refit-per-fold backend (planned: `backends/scvi.py` raises `NotImplementedError` in 0.2.0; the extra reserves the dependency) |
 | `all` | everything above | |
 
 ```bash

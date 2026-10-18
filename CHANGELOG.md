@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
+The software on which benchmark gate G1 (semi-synthetic perturbations of Stephenson et al. 2021
+PBMC: leave-one-donor/study-out, withheld state, donor-support restriction, against scANVI, scPoli
+and Symphony) was evaluated at `07def17` (StateTrace-benchmarking `00_gates/_m/G1.md`,
+2026-10-16). `insufficient` recall (1.000) and backend status agreement (0.843) passed;
+withheld-state detection failed (0.652 against the best mapper's 0.722) and the failure was
+accepted as a stated limitation on 2026-10-18 (see Known limitations). Every default that changed
+in this release was chosen on the simulator, never on the G1 data.
+
 ### Added
 - Out-of-reference scores that see a population the reference lacks when it sits *between*
   reference states rather than away from them (`TransportConfig.ood_score`): `"support"`, the
@@ -130,9 +140,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning (`LinAlgError` is a `ValueError`); it used to fall back to the mapping latent and so
   change the shift and reproducibility diagnostics with only a warning.
 
+### Known limitations
+- A population that a mapper places *between* two reference states, at distances no larger than
+  those states' own held-out cells, is not seen by any distance score (centroid or kNN in the
+  mapper latent, pseudobulk distance in the frozen expression space); only its mixed reference
+  neighbourhood is. The benchmark's G1 withheld CD4 T cells from a PBMC reference that keeps Tregs
+  and CD8 and every mapper absorbed them this way (detection AUROC 0.652 against 0.722 required).
+  The support-deficit score (`ood_score="support"`) sees part of this case but did not meet its
+  pre-registered replacement rule, so it ships as a sensitivity diagnostic and `knn` stays the
+  default. Report the unknown fraction and the mixed-neighbourhood evidence next to any
+  "no novel population" conclusion.
+
 ### Planned
-- Stage 7 StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
-  benchmark design and optional CellART adapter; roadmap only, schedule and version unassigned.
+- Stage 6 (0.5.0) StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
+  benchmark design and optional CellART adapter; roadmap only, schedule unassigned, not a
+  submission requirement.
 - scANVI `AnnDataBackend` with per-fold latent refitting (`statetrace[scvi]`).
 - Downstream-validity helpers (type I error and replication summaries for gated vs ungated analyses).
 - Plotting.
