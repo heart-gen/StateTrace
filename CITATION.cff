@@ -3,7 +3,7 @@ message: "If you use StateTrace in your research, please cite the software using
 title: "StateTrace"
 type: software
 version: "0.2.0"
-date-released: "2026-10-18"
+date-released: "2026-10-19"
 authors:
   - family-names: "Benjamin"
     given-names: "Kynon J. M."
