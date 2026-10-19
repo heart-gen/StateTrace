@@ -70,7 +70,7 @@ def test_scanvi_backend_points_to_extra():
         "import sys; sys.modules['scvi'] = None\n"
         "from statetrace.backends import get_backend\n"
         "try:\n    get_backend('scanvi')\n"
-        "except ImportError as e:\n    assert 'statetrace[scvi]' in str(e), str(e)\n"
+        "except ImportError as e:\n    assert 'statetrace-sc[scvi]' in str(e), str(e)\n"
         "else:\n    raise SystemExit('expected ImportError')\n"
     )
     proc = _run(code)
@@ -82,7 +82,7 @@ def test_plotting_points_to_extra():
         "import sys; sys.modules['matplotlib'] = None\n"
         "from statetrace.plotting import plot_state_reproducibility\n"
         "try:\n    plot_state_reproducibility()\n"
-        "except ImportError as e:\n    assert 'statetrace[plot]' in str(e), str(e)\n"
+        "except ImportError as e:\n    assert 'statetrace-sc[plot]' in str(e), str(e)\n"
         "else:\n    raise SystemExit('expected ImportError')\n"
     )
     proc = _run(code)

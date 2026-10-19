@@ -13,5 +13,5 @@ dependencies:
   - matplotlib
   - pip:
       # scvi-tools (and therefore torch) is intentionally not installed here; install
-      # `statetrace[scvi]` with a torch build that matches the local CPU/GPU stack.
+      # `statetrace-sc[scvi]` with a torch build that matches the local CPU/GPU stack.
       - -e .[dev]

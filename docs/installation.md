@@ -3,8 +3,11 @@
 StateTrace supports Python 3.11 to 3.14.
 
 ```bash
-pip install statetrace
+pip install statetrace-sc
 ```
+
+The distribution is `statetrace-sc` on PyPI (PyPI reserves `statetrace` against the unrelated
+`state-trace` project); the import name is `statetrace`.
 
 ## Extras
 
@@ -17,11 +20,11 @@ pip install statetrace
 | `all` | everything above | |
 
 ```bash
-pip install "statetrace[dev]"
+pip install "statetrace-sc[dev]"
 ```
 
 torch is never a direct dependency. If you plan to use the scANVI backend, install a torch
-build that matches your CPU or GPU stack first, then `pip install "statetrace[scvi]"`.
+build that matches your CPU or GPU stack first, then `pip install "statetrace-sc[scvi]"`.
 
 ## From source
 

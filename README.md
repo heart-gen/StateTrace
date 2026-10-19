@@ -1,8 +1,8 @@
 # StateTrace
 
 [![CI](https://github.com/heart-gen/StateTrace/actions/workflows/ci.yml/badge.svg)](https://github.com/heart-gen/StateTrace/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/statetrace.svg)](https://pypi.org/project/statetrace/)
-[![Python](https://img.shields.io/pypi/pyversions/statetrace.svg)](https://pypi.org/project/statetrace/)
+[![PyPI](https://img.shields.io/pypi/v/statetrace-sc.svg)](https://pypi.org/project/statetrace-sc/)
+[![Python](https://img.shields.io/pypi/pyversions/statetrace-sc.svg)](https://pypi.org/project/statetrace-sc/)
 [![Docs](https://readthedocs.org/projects/statetrace/badge/?version=latest)](https://statetrace.readthedocs.io/en/latest/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -53,8 +53,11 @@ test. It is tissue-, disease- and atlas-agnostic.
 ## Installation
 
 ```bash
-pip install statetrace
+pip install statetrace-sc
 ```
+
+The distribution is `statetrace-sc` on PyPI (PyPI reserves `statetrace` against the unrelated
+`state-trace` project); the import name is `statetrace`.
 
 | Extra | Adds | Needed for |
 |---|---|---|

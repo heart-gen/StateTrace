@@ -1,5 +1,8 @@
 [project]
-name = "statetrace"
+# Distribution name. PyPI refuses "statetrace" as too similar to the unrelated
+# "state-trace" project (separators are ignored), so the wheel is statetrace-sc;
+# the import name stays `statetrace` (see [tool.poetry].packages).
+name = "statetrace-sc"
 version = "0.2.0"
 description = "Donor-aware framework for building, freezing, validating and transporting cellular-state references across single-cell datasets."
 readme = "README.md"
@@ -58,7 +61,7 @@ scvi = [
     "scvi-tools>=1.2,<2",
 ]
 all = [
-    "statetrace[dev,docs,plot,scvi]",
+    "statetrace-sc[dev,docs,plot,scvi]",
 ]
 
 [project.urls]

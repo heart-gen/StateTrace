@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib.util
 from typing import Any, ClassVar
 
-INSTALL_HINT = "pip install 'statetrace[scvi]'"
+INSTALL_HINT = "pip install 'statetrace-sc[scvi]'"
 
 
 class ScanviBackend:

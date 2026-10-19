@@ -16,7 +16,7 @@ from importlib.metadata import version as _v
 from typing import TYPE_CHECKING
 
 try:
-    __version__ = _v("statetrace")
+    __version__ = _v("statetrace-sc")
 except PackageNotFoundError:  # pragma: no cover
     __version__ = "0.0.0"
 

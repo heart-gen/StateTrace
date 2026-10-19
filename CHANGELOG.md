@@ -90,6 +90,9 @@ in this release was chosen on the simulator, never on the G1 data.
   `"holdout"` (see Changed).
 
 ### Changed
+- Distribution name on PyPI is `statetrace-sc`: PyPI refuses `statetrace` as too similar to
+  the unrelated `state-trace` project (separators are ignored in the comparison). The import
+  name, the repository and the documentation keep `statetrace`; `pip install statetrace-sc`.
 - **Defaults that change results on the same data** (benchmark gate G1 failed on 0.1.0: the
   status differed across mappers and the centroid novelty score lost withheld populations;
   every fix was chosen on the simulator, never on the G1 data):

@@ -12,13 +12,14 @@ if SRC.is_dir():
     sys.path.insert(0, str(SRC))
 
 # Project metadata from pyproject (no package import needed)
-project = "statetrace"
+project = "StateTrace"
+_dist = "statetrace-sc"  # distribution name on PyPI; the import name is statetrace
 author = "Kynon J Benjamin"
 _meta: dict = {}
 try:
     with open(ROOT / "pyproject.toml", "rb") as f:
         _meta = tomllib.load(f).get("project", {})
-        project = _meta.get("name", project) or project
+        _dist = _meta.get("name", _dist) or _dist
         names = [x.get("name", "") for x in _meta.get("authors", []) if isinstance(x, dict)]
         author = ", ".join(n for n in names if n) or author
 except Exception:  # pragma: no cover
@@ -29,7 +30,7 @@ def _read_version() -> str:
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        return version(project)
+        return version(_dist)
     except PackageNotFoundError:
         return _meta.get("version", "0.0.0")
 

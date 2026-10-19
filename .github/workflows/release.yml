@@ -30,7 +30,8 @@ jobs:
         id: build
         run: poetry build
       # Trusted publishing, so there is no token to check here: PyPI must list a
-      # publisher for heart-gen/StateTrace, workflow release.yml, environment pypi.
+      # publisher for the project statetrace-sc (heart-gen/StateTrace, workflow
+      # release.yml, environment pypi).
       # Without a match the OIDC exchange is refused and nothing is uploaded (as on
       # every rfmix_reader 0.7.x tag).
       - name: Publish to PyPI

@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib.util
 from typing import Any
 
-INSTALL_HINT = "pip install 'statetrace[plot]'"
+INSTALL_HINT = "pip install 'statetrace-sc[plot]'"
 
 
 def _require_matplotlib() -> None:
