@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-18
+## [0.2.0] - 2026-10-19
 
 The software on which benchmark gate G1 (semi-synthetic perturbations of Stephenson et al. 2021
 PBMC: leave-one-donor/study-out, withheld state, donor-support restriction, against scANVI, scPoli
