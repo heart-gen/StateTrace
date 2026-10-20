@@ -5,17 +5,60 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ## [0.2.0] - 2026-10-19
 
-The software on which benchmark gate G1 (semi-synthetic perturbations of Stephenson et al. 2021
-PBMC: leave-one-donor/study-out, withheld state, donor-support restriction, against scANVI, scPoli
-and Symphony) was evaluated at `07def17` (StateTrace-benchmarking `00_gates/_m/G1.md`,
-2026-10-16). `insufficient` recall (1.000) and backend status agreement (0.843) passed;
-withheld-state detection failed (0.652 against the best mapper's 0.722) and the failure was
-accepted as a stated limitation on 2026-10-18 (see Known limitations). Every default that changed
-in this release was chosen on the simulator, never on the G1 data.
+StateTrace 0.2.0 expands reference validation and transport diagnostics
+with calibrated out-of-reference detection, mapper-independent reference
+reproducibility diagnostics, study-aware novelty calibration, and
+complementary cell- and donor-level distribution-shift tests.
+
+### Highlights
+
+- **Improved reference validation.** Reproducibility can now be evaluated
+  in a frozen expression space, independently of mapper-specific latent
+  coordinates. Study-aware holdout calibration accounts for variation
+  across represented studies, with fallback for insufficient evidence.
+
+- **Calibrated novelty detection.** kNN distance replaces centroid
+  distance as the default OOD statistic following a prespecified
+  simulation-based comparison. Support-deficit and combined
+  kNN-support diagnostics are available for sensitivity analysis.
+
+- **Complementary shift evidence.** E-distance permutation testing and
+  optional scXMatch cross-match testing assess cell-level and
+  donor-profile distribution differences without changing state
+  classifications.
+
+- **Reference-aware caution thresholds.** Recovery and uncertainty
+  warnings now use held-out reference evidence rather than fixed
+  thresholds where sufficient calibration data are available.
+
+- **Reproducibility and compatibility.** Frozen-reference format 4 adds
+  cell-level expression coordinates and donor profiles. Format 3
+  references remain loadable. Configuration provenance and fallback
+  decisions are recorded.
+
+### Benchmark status
+
+Benchmark G1 was evaluated using StateTrace commit `07def17`
+(StateTrace-benchmarking `00_gates/_m/G1.md`, 2026-10-16).
+
+The benchmark passed insufficient-state recall (1.000) and
+cross-backend status agreement (0.843). Withheld-state detection
+did not meet its registered criterion (AUROC 0.652 versus the
+registered comparison value of 0.722).
+
+The withheld-state detection failure remains accepted as a
+documented limitation, not a successful benchmark outcome.
+
+Release defaults were selected using simulator-based criteria rather
+than optimized against G1. Inspection of G1 identified an additional
+mixed-neighborhood failure mode, motivating support-based diagnostics.
+Those diagnostics did not satisfy the registered replacement rule and
+are retained as post hoc sensitivity tools rather than new defaults.
+
+The G1 results describe the evaluated commit and do not independently
+validate additions made after that evaluation.
 
 ### Added
 - Out-of-reference scores that see a population the reference lacks when it sits *between*
@@ -144,15 +187,32 @@ in this release was chosen on the simulator, never on the G1 data.
   change the shift and reproducibility diagnostics with only a warning.
 
 ### Known limitations
-- A population that a mapper places *between* two reference states, at distances no larger than
-  those states' own held-out cells, is not seen by any distance score (centroid or kNN in the
-  mapper latent, pseudobulk distance in the frozen expression space); only its mixed reference
-  neighbourhood is. The benchmark's G1 withheld CD4 T cells from a PBMC reference that keeps Tregs
-  and CD8 and every mapper absorbed them this way (detection AUROC 0.652 against 0.722 required).
-  The support-deficit score (`ood_score="support"`) sees part of this case but did not meet its
-  pre-registered replacement rule, so it ships as a sensitivity diagnostic and `knn` stays the
-  default. Report the unknown fraction and the mixed-neighbourhood evidence next to any
-  "no novel population" conclusion.
+
+**Absorbed novel populations.** StateTrace may fail to identify a withheld population when
+mapping places its cells within the distance distribution of existing reference states.
+
+In benchmark G1, withheld CD4 T cells were absorbed into retained Treg and CD8 states. The
+evaluated distance-based diagnostics did not reliably distinguish these cells from held-out
+reference cells. The registered withheld-state detection criterion was not met
+(AUROC 0.652 versus 0.722).
+
+Mixed-neighborhood support provided additional information about this failure mode. However,
+the support-deficit and combined kNN-support scores did not satisfy their prespecified
+replacement criteria. They are retained as sensitivity diagnostics; kNN distance
+remains the default OOD score.
+
+**Reference completeness.** A low out-of-reference fraction does not establish that all
+biological populations are represented. Novelty estimates should be interpreted alongside
+neighborhood support, reference recovery, and uncertainty diagnostics.
+
+**Statistical interpretation.** Cell-level two-sample tests identify differences in sampled
+cell distributions but do not by themselves establish donor-level replication.
+Donor-profile evidence is reported separately. Neither test changes StateTrace status calls.
+
+**Calibration and transportability.** Holdout calibration describes variation represented
+in the reference. Performance may degrade for new studies, populations, or technical
+conditions not adequately represented by those holdouts. Insufficient calibration evidence
+triggers documented fallback behavior.
 
 ### Planned
 - Stage 6 (0.5.0) StateTrace-Spatial: segmentation-stability diagnostics, controlled boundary-error
