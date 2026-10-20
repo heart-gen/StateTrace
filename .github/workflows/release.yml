@@ -23,9 +23,24 @@ jobs:
       - name: Install poetry
         run: pipx install poetry
       - name: Check tag matches pyproject version
+        id: version
         run: |
           v=$(poetry version -s)
           [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != v$v"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      # The GitHub release body is this version's CHANGELOG section (Keep a Changelog
+      # heading `## [X.Y.Z] - date`), not the auto-generated list of merged PRs. A tag
+      # without a changelog section fails here, before anything is built or uploaded.
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          {
+            echo "\`pip install statetrace-sc==$v\` (import name \`statetrace\`)."
+            echo
+            awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md
+          } > release_notes.md
+          [ "$(wc -l < release_notes.md)" -gt 3 ] || { echo "no CHANGELOG section for $v"; exit 1; }
+          cat release_notes.md
       - name: Build
         id: build
         run: poetry build
@@ -47,5 +62,7 @@ jobs:
         if: always() && steps.build.outcome == 'success'
         uses: softprops/action-gh-release@v2
         with:
+          name: StateTrace ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          generate_release_notes: false
           files: dist/*
-          generate_release_notes: true
