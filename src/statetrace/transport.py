@@ -95,6 +95,9 @@ STATE_COLUMNS = (
     "caution_reasons",
     "query_recall",
     "status",
+    "shift_cutoff_distance",
+    "shift_boundary",
+    "status_alternative",
 )
 
 
@@ -183,6 +186,14 @@ class TransportConfig:
         median over query donors of the donor x state pseudobulk distance standardised against
         held-out reference donors (expression space), or the centroid displacement in
         per-dimension reference sd (mapping latent).
+    shift_tolerance
+        A state whose deciding ``shift`` lies within ``shift_tolerance`` (reference sd units) of
+        ``shift_moderate`` or ``shift_high`` is flagged ``shift_boundary``, and
+        ``status_alternative`` reports the status it would carry with the shift on the other
+        side of that cutoff (``shift_cutoff_distance`` is the distance). Reported only: the
+        status is unchanged. Two mappers whose assignments move a state's pseudobulk across a
+        cutoff differ in label, not in evidence; the flag lets a consumer read label agreement
+        within the tolerance.
     shift_source
         ``"auto"`` uses the frozen expression space when the reference carries one and the
         query has its genes, else the mapping latent; ``"expression"`` or ``"latent"`` force
@@ -244,6 +255,7 @@ class TransportConfig:
     max_ood_fraction: float = 0.3
     shift_moderate: float = 2.0
     shift_high: float = 4.0
+    shift_tolerance: float = 0.05
     require_reference_validation: bool = True
     correct_cohort_offset: bool = True
     latent_group_offset: bool = True
@@ -257,6 +269,8 @@ class TransportConfig:
     def __post_init__(self) -> None:
         if self.shift_source not in ("auto", "expression", "latent"):
             raise ValueError("shift_source must be 'auto', 'expression' or 'latent'")
+        if self.shift_tolerance < 0:
+            raise ValueError("shift_tolerance must be >= 0")
         if self.ood_rule not in novelty.OOD_RULES:
             raise ValueError(f"ood_rule must be one of {novelty.OOD_RULES}")
         if self.ood_score not in novelty.OOD_SCORES:
@@ -295,9 +309,12 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     """
     Rule-based status for one state, evaluated in order.
 
-    1. ``absent``: too few supported query cells or no observing group.
-    2. ``insufficient``: the reference itself does not reproduce the state (``ref_reproducibility``,
-       judged in the space ``LODOConfig.reproducibility_space`` chose).
+    1. ``insufficient``: the reference itself does not reproduce the state (``ref_reproducibility``
+       ``fragile`` or ``insufficient``, judged in the space ``LODOConfig.reproducibility_space``
+       chose). A reference that does not reproduce a state supports no claim about the query,
+       including its absence, so this is checked before anything the query shows (0.2.1; 0.2.0
+       read ``absent`` first).
+    2. ``absent``: too few supported query cells or no observing group.
     3. Displaced (high shift in the deciding coordinate system, or out-of-reference fraction
        above the maximum): if the cells that *do* lie within the reference distribution still
        recover the state in enough groups with low shift, an out-of-reference population sits
@@ -308,12 +325,12 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
        a tool that gives neither confidence nor a latent to compute support from), else
        ``supported``.
     """
-    n_supported = row.get("n_cells_supported", row["n_cells"])
-    if n_supported < cfg.min_cells_total or row["groups_observed"] == 0:
-        return "absent"
     rep = row["ref_reproducibility"]
     if rep in ("fragile", "insufficient"):
         return "insufficient"
+    n_supported = row.get("n_cells_supported", row["n_cells"])
+    if n_supported < cfg.min_cells_total or row["groups_observed"] == 0:
+        return "absent"
     if _displaced(row, cfg):
         coherent = row["groups_recovered_in_reference"] >= cfg.min_groups_recovered and row[
             "shift_in_reference_level"
@@ -322,6 +339,32 @@ def transport_status(row: pd.Series | dict, cfg: TransportConfig) -> str:
     if row["groups_recovered"] < cfg.min_groups_recovered:
         return "insufficient"
     return "supported_with_caution" if caution_reasons(row, cfg) else "supported"
+
+
+def boundary_alternative(row: pd.Series | dict, cfg: TransportConfig) -> tuple[float, bool, str]:
+    """
+    The distance of a state's deciding ``shift`` to the nearest cutoff, whether it lies within
+    ``cfg.shift_tolerance`` of it (``shift_boundary``) and, if so, the status the state would
+    carry with its shift level on the other side of that cutoff (``status_alternative``; ``""``
+    otherwise). The status itself is never changed here.
+    """
+    shift = float(row.get("shift", np.nan))
+    if not np.isfinite(shift):
+        return np.nan, False, ""
+    cuts = ((cfg.shift_moderate, "low", "moderate"), (cfg.shift_high, "moderate", "high"))
+    dist, cut, alt = min(
+        ((abs(shift - c), c, (above if shift < c else below)) for c, below, above in cuts),
+        key=lambda x: x[0],
+    )
+    if dist > cfg.shift_tolerance:
+        return float(dist), False, ""
+    alt_row = {**dict(row), "shift_level": alt}
+    # the in-reference shift crosses with it when it sits within the tolerance of the same cutoff on
+    # the same side (it usually tracks the deciding shift closely); a distant one keeps its level
+    in_ref = float(row.get("shift_in_reference", np.nan))
+    if np.isfinite(in_ref) and abs(in_ref - cut) <= cfg.shift_tolerance and (in_ref < cut) == (shift < cut):
+        alt_row["shift_in_reference_level"] = alt
+    return float(dist), True, transport_status(alt_row, cfg)
 
 
 def _displaced(row: pd.Series | dict, cfg: TransportConfig) -> bool:
@@ -1211,6 +1254,10 @@ def validate_transport(
         else ""
         for (_, row), status in zip(st.iterrows(), st["status"], strict=True)
     ]
+    boundary = [boundary_alternative(row, cfg) for _, row in st.iterrows()]
+    st["shift_cutoff_distance"] = [d for d, _, _ in boundary]
+    st["shift_boundary"] = [b for _, b, _ in boundary]
+    st["status_alternative"] = [a for _, _, a in boundary]
     st.index.name = "state"
     st = st[list(STATE_COLUMNS)]
     cells = cells.drop(columns="_supported_label")
@@ -1261,6 +1308,8 @@ def validate_transport(
             ),
             "caution_calibration": "holdout" if holdout_groups is not None else "fixed",
             "caution_states_holdout": int((st["caution_basis"] == "holdout").sum()),
+            "shift_tolerance": cfg.shift_tolerance,
+            "boundary_states": int(st["shift_boundary"].sum()),
             "population_calibration": (
                 "holdout"
                 if cfg.population_calibration == "holdout"

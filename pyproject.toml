@@ -3,7 +3,7 @@
 # "state-trace" project (separators are ignored), so the wheel is statetrace-sc;
 # the import name stays `statetrace` (see [tool.poetry].packages).
 name = "statetrace-sc"
-version = "0.2.0"
+version = "0.2.1"
 description = "Donor-aware framework for building, freezing, validating and transporting cellular-state references across single-cell datasets."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"

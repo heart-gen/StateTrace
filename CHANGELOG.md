@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-23
+
+Status rule and reporting changes from the first real-data transport runs (benchmark stage 03,
+Ren et al. 2021 cross-protocol PBMC). No change to reference validation, novelty scores or the
+shift statistics.
+
+### Changed
+
+- **Reference reproducibility is checked before absence.** `transport_status` reads a state
+  whose reference reproducibility is `fragile` or `insufficient` as `insufficient` before any
+  claim about the query; 0.2.0 read it `absent` when fewer than `min_cells_total` query cells
+  were assigned. A reference that does not reproduce a state supports no claim about the query,
+  its absence included; mappers that assign few or many cells to such a state now agree.
+
+### Added
+
+- `TransportConfig.shift_tolerance` (default 0.05 reference sd) and the state columns
+  `shift_cutoff_distance`, `shift_boundary` and `status_alternative`: a status whose deciding
+  shift lies within the tolerance of `shift_moderate` or `shift_high` is flagged, with the status
+  it would carry on the other side of that cutoff. Reported only; the status is unchanged. The
+  transport report shows `status_alternative`, and the route records `boundary_states`.
+
 ## [0.2.0] - 2026-10-19
 
 StateTrace 0.2.0 expands reference validation and transport diagnostics

@@ -90,6 +90,7 @@ def write_report(
             "groups_shifted",
             "novel_population",
             "status",
+            "status_alternative",
             "caution_reasons",
         ]
     ].copy()

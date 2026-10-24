@@ -142,20 +142,25 @@ least `min_confidence` when a confidence exists, out-of-reference fraction at mo
 | `novel_population` | an out-of-reference population (above the state's `ood_threshold`) sits next to the state |
 | `query_recall` | only when query labels are given (benchmarks) |
 | `status` | the gating decision |
+| `shift_cutoff_distance`, `shift_boundary`, `status_alternative` | distance of the deciding `shift` to the nearest cutoff; whether it lies within `shift_tolerance` (0.05) of one; the status the state would carry with its shift on the other side of that cutoff (`""` otherwise). Reported only: the status is unchanged |
 
 ## Status rules (evaluated in order)
 
 | Status | Rule (defaults of {class}`~statetrace.TransportConfig`) |
 |---|---|
+| `insufficient` (reference) | reference reproducibility `fragile` or `insufficient`: a reference that does not reproduce a state supports no claim about the query, its absence included (checked first since 0.2.1) |
 | `absent` | fewer than `min_cells_total` (50) supported query cells or no donor observes it |
-| `insufficient` (reference) | reference reproducibility `fragile` or `insufficient` |
 | `shifted` | `shift_level` high (at least 4 reference sd in the deciding coordinate system) or `ood_fraction` above the state's `ood_threshold`, unless the in-reference cells still recover the state in enough groups with low shift, in which case an out-of-reference population sits beside an intact state -> `supported_with_caution` with `novel_population` |
 | `insufficient` (query) | fewer than `min_groups_recovered` (3) donors recover it |
 | `supported_with_caution` | reference reproducibility `moderate` or `unvalidated`, recovery rate below 0.8, uncertain fraction above 0.2 (or, with `caution_calibration="holdout"`, recovery or uncertainty measurably worse than in held-out reference donors; below), moderate shift, or no confidence evidence at all (`confidence_source` `none`) |
 | `supported` | otherwise |
 
 The rules are descriptive defaults meant to be predeclared in a benchmark and reported with
-the raw columns, not tuned to make a state pass. `caution_reasons` lists the triggers a
+the raw columns, not tuned to make a state pass. The shift cutoffs cut a continuous statistic:
+two mappers whose assignments move a state's pseudobulk a few hundredths of a standard
+deviation across a cutoff differ in label, not in evidence. `shift_boundary` and
+`status_alternative` carry that margin so a consumer can read label agreement within
+`shift_tolerance` next to exact agreement; neither changes the status. `caution_reasons` lists the triggers a
 cautioned state met (`novel_population`, `reproducibility`, `recovery`, `uncertainty`,
 `shift`, `no_confidence`).
 

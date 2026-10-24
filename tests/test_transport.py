@@ -207,6 +207,47 @@ def test_status_rule_table():
     assert transport_status({**base, "confidence_source": "support"}, cfg) == "supported"
     # absence is judged on cells with local reference support
     assert transport_status({**base, "n_cells_supported": 10}, cfg) == "absent"
+    # a reference that does not reproduce the state supports no claim about the query, absence included
+    assert transport_status({**base, "n_cells": 10, "ref_reproducibility": "fragile"}, cfg) == "insufficient"
+    assert transport_status({**base, "n_cells_supported": 10, "ref_reproducibility": "insufficient"}, cfg) == "insufficient"
+
+
+def test_boundary_alternative_reports_the_label_across_the_cutoff():
+    from statetrace.transport import boundary_alternative
+
+    cfg = TransportConfig()
+    base = {
+        "n_cells": 500,
+        "groups_observed": 13,
+        "groups_recovered": 13,
+        "recovery_rate": 1.0,
+        "ref_reproducibility": "stable",
+        "ood_fraction": 0.0,
+        "uncertain_fraction": 0.0,
+        "groups_recovered_in_reference": 13,
+        "shift_in_reference_level": "moderate",
+        "shift_in_reference": 3.96,
+        "shift": 3.98,
+        "shift_level": "moderate",
+    }
+    assert transport_status(base, cfg) == "supported_with_caution"
+    dist, boundary, alt = boundary_alternative(base, cfg)
+    assert boundary and abs(dist - 0.02) < 1e-9 and alt == "shifted"
+    # an in-reference shift well below the cutoff keeps its level: across the cutoff the state reads
+    # as displaced but coherent (a population beside an intact state), the rule's own reading
+    assert boundary_alternative({**base, "shift_in_reference": 3.5}, cfg)[2] == "supported_with_caution"
+    dist, boundary, alt = boundary_alternative({**base, "shift": 3.5}, cfg)
+    assert not boundary and abs(dist - 0.5) < 1e-9 and alt == ""
+    dist, boundary, alt = boundary_alternative({**base, "shift": 2.03, "shift_in_reference": 2.01}, cfg)
+    assert boundary and alt == "supported"
+    dist, boundary, alt = boundary_alternative({**base, "shift": 4.04, "shift_level": "high", "shift_in_reference": 4.03, "shift_in_reference_level": "high"}, cfg)
+    assert boundary and alt == "supported_with_caution"
+    dist, boundary, alt = boundary_alternative({**base, "shift": float("nan")}, cfg)
+    assert not boundary and alt == "" and np.isnan(dist)
+    tight = TransportConfig(shift_tolerance=0.0)
+    assert boundary_alternative(base, tight)[1] is False
+    with pytest.raises(ValueError):
+        TransportConfig(shift_tolerance=-0.1)
 
 
 def test_config_validation():
