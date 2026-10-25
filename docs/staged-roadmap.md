@@ -100,6 +100,19 @@ benchmark's stages 03 and 04 open on this code and state the limitation. The ben
 predeclared real-data out-of-reference rule fired on the same records (held-out studies of intact
 states exceed 10 % out-of-reference under q95), so real-data stages use the held-out 99th percentile.
 
+2026-10-25: G2 was evaluated on 0.2.1 (`53f7af0`) after both real-data stages were rerun from
+prepare. Stage 04 (HLCA cross-study) passed every check: backend agreement 0.870, the scIB paradox
+present, StateTrace's donor-level shift AUROC 0.583 against the best two-sample engine's 0.533,
+technical false calls 0.033, monotonicity 0.85. Stage 03 (Ren et al. 2021, 5' reference against 3'
+query cohorts) read 0.778 exact agreement against 0.80 (0.833 within the 0.05 sd shift tolerance,
+reported): four of 18 pairs depend on the mapper, three at the shift cutoffs through each mapper's
+assignment composition and one rare state read `insufficient` or `absent`. The PI accepted the
+failure as a stated limitation; the 0.2.1 status-order correction stands and no further change is
+made for the gate. Two directions are recorded for the application stages (0.3): the shift per query
+donor with the status read from the donor-level interval (a data-driven boundary flag in place of
+the fixed tolerance), and a consensus transport status across backends with the agreement reported
+as its reliability. Neither targets G2, whose criterion is per-backend agreement.
+
 Inputs this software waits on from the benchmark side are listed there (`INPUTS_NEEDED.md`,
 `TIMELINE.md`); the ones that gate software work are the comparator sign-offs (done), the
 reference objects of the application stages, the replication definitions for U2 / U3, and the
@@ -231,6 +244,12 @@ simple rules a careful analyst already uses.
   record the answer in the docs and the transport report's caveats.
 - Group-aware calibration tables: a backend's confidence against recovery in an unseen donor.
 - Feature-retention reporting in `route.report()`.
+- Donor-level shift interval: the frozen-expression shift computed per query donor, the state's
+  level read from the interval across donors, and the boundary flag derived from that interval
+  rather than the fixed `shift_tolerance` (recorded 2026-10-25 from the G2 stage-03 reading).
+- Consensus transport status across backends (`Predictions` from several mappers of the same
+  query): the modal status with the per-backend statuses and their agreement reported as its
+  reliability; an application-stage mode, never a substitute for the per-backend criterion.
 - Downstream helpers needed for U2: the replication model (`replication ~ cell_confidence +
   cell_number + donor_number + integration_score + StateTrace`) is a benchmark analysis, but
   the software must export the per-state terms it uses in one table.
