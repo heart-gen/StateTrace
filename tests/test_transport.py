@@ -980,3 +980,39 @@ def test_support_scores_see_a_withheld_state_absorbed_between_two_states():
     ].mean() >= (routes["knn"].cells["category"] == "out_of_reference").to_numpy()[
         novel
     ].mean() - 0.02
+
+
+def test_donor_level_shift_interval_and_interval_alternative(validated_ref, transport_pair):
+    from statetrace.transport import interval_alternative
+
+    _, qry, _ = transport_pair
+    route = validate_transport(validated_ref, qry, group_key="donor_id", query_state_key="cell_state")
+    st = route.states
+    assert {"shift_ci_low", "shift_ci_high", "shift_interval_boundary", "status_interval_alternative"} <= set(st.columns)
+    expr = st[(st["shift_source"] == "expression") & (st["groups_scored_expression"] >= 3)]
+    assert len(expr) and np.isfinite(expr["shift_ci_low"]).all() and np.isfinite(expr["shift_ci_high"]).all()
+    # the point median lies inside its own donor-level interval; the interval is never degenerate
+    assert ((expr["shift_ci_low"] <= expr["shift"] + 1e-9) & (expr["shift"] <= expr["shift_ci_high"] + 1e-9)).all()
+    assert (expr["shift_ci_high"] > expr["shift_ci_low"]).any()
+    # states without an expression-sourced shift or with too few donors carry no interval
+    other = st[(st["shift_source"] != "expression") | (st["groups_scored_expression"] < 3)]
+    assert other["shift_ci_low"].isna().all() and (~other["shift_interval_boundary"]).all()
+    assert route.reference["shift_interval"] == 0.9 and route.reference["interval_boundary_states"] == int(st["shift_interval_boundary"].sum())
+    # the interval is seeded and deterministic; 0 disables it
+    again = validate_transport(validated_ref, qry, group_key="donor_id")
+    pd.testing.assert_series_equal(again.states["shift_ci_low"], st["shift_ci_low"])
+    off = validate_transport(validated_ref, qry, group_key="donor_id", config=TransportConfig(shift_interval=0.0))
+    assert off.states["shift_ci_low"].isna().all() and (~off.states["shift_interval_boundary"]).all()
+    with pytest.raises(ValueError, match="shift_interval"):
+        TransportConfig(shift_interval=1.0)
+    # the alternative is the status at the interval's other end; the status itself is untouched
+    cfg = TransportConfig()
+    row = dict(st.loc["S2"])
+    # the final state table drops the holdout-caution working columns, so the fixed caution basis applies here
+    row.update({"shift": 1.7, "shift_level": "low", "shift_ci_low": 1.2, "shift_ci_high": 2.6, "status": "supported", "caution_basis": "fixed", "recovery_rate": 1.0, "uncertain_fraction": 0.0, "ref_reproducibility": "stable", "ood_fraction": 0.0})
+    boundary, alt = interval_alternative(row, cfg)
+    assert boundary and alt == "supported_with_caution" and transport_status(row, cfg) == "supported"
+    row.update({"shift_ci_low": 1.2, "shift_ci_high": 1.9})
+    assert interval_alternative(row, cfg) == (False, "")
+    row.update({"shift_ci_low": np.nan, "shift_ci_high": np.nan})
+    assert interval_alternative(row, cfg) == (False, "")

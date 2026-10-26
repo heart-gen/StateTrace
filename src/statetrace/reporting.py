@@ -91,9 +91,18 @@ def write_report(
             "novel_population",
             "status",
             "status_alternative",
+            "status_interval_alternative",
             "caution_reasons",
         ]
     ].copy()
+    show.insert(
+        show.columns.get_loc("status_interval_alternative"),
+        "shift_ci",
+        [
+            f"{lo:.1f}-{hi:.1f}" if np.isfinite(lo) and np.isfinite(hi) else ""
+            for lo, hi in zip(st["shift_ci_low"], st["shift_ci_high"], strict=True)
+        ],
+    )
     show["groups_recovered"] = (
         show["groups_recovered"].astype(str) + "/" + show["query_groups"].astype(str)
     )
@@ -157,7 +166,12 @@ def write_report(
         "held-out reference donors in the frozen expression space; `latent`: centroid shift in "
         "per-dimension reference sd in the mapping latent; both after cohort-offset removal); "
         "query donors whose pseudobulk lies at or beyond the high-shift threshold (of donors "
-        "scored); whether an out-of-reference population sits next to the state.",
+        "scored); whether an out-of-reference population sits next to the state; the status, "
+        "the status the state would carry with its shift on the other side of the nearest "
+        "cutoff when within `shift_tolerance` of it, the donor-level interval of the shift "
+        "(bootstrap over query donors) and the status at its other end when the interval "
+        "straddles a cutoff. The alternatives and the interval are reported margins; neither "
+        "changes the status.",
         "",
         "## Coordinate systems",
         "",
