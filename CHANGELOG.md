@@ -5,7 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-27
+
+0.3.0 reformatted; no code change. The CI lint job had failed `ruff format --check` on two
+files since the v0.2.1 tag, and the release workflow's publish job depends on it, so neither
+0.2.1 nor 0.3.0 reached PyPI. 0.3.1 is the first published 0.3 release; its behaviour, API and
+record columns are those of 0.3.0 (`31e1856`, the commit installed from the git tag on
+Bridges-2 for the benchmark's application stages).
+
+### Fixed
+
+- Formatting of `robustness.py` and `tests/test_robustness_aggregation_features.py` to the
+  pinned ruff (0.6.9); CI and the release workflow pass again.
+
 ## [0.3.0] - 2026-10-27
+
+Not published to PyPI (see 0.3.1); tagged at `31e1856`.
 
 Reporting additions recorded on the roadmap after the G2 reading (benchmark `GATES.md`,
 2026-10-25): margins and a consensus for the application stages. Released for the benchmark's
