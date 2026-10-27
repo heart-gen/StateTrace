@@ -272,6 +272,10 @@ G3 repeats G2 on brain with pathology-stratum stability.
 ### Expected artifacts
 
 `03_pbmc/_m/`, `04_hlca/_m/`, `05_brain/_m/`, `G2.md`, `U2.md`, `G3.md`, tags v0.2.x and v0.3.0.
+G3 passed on v0.2.1 (`53f7af0`, 2026-10-26). Decided by the PI on 2026-10-27: v0.3.0 is
+released and installed before the first application stage (benchmark stage 06); stages 03-05
+keep the v0.2.1 records their gates were read on, with the version stated per stage, and are
+not rerun before G4. The v0.3 additions change what is reported, not the status rule.
 
 ## Stage 4: inference validity and G4
 
