@@ -208,8 +208,16 @@ def test_status_rule_table():
     # absence is judged on cells with local reference support
     assert transport_status({**base, "n_cells_supported": 10}, cfg) == "absent"
     # a reference that does not reproduce the state supports no claim about the query, absence included
-    assert transport_status({**base, "n_cells": 10, "ref_reproducibility": "fragile"}, cfg) == "insufficient"
-    assert transport_status({**base, "n_cells_supported": 10, "ref_reproducibility": "insufficient"}, cfg) == "insufficient"
+    assert (
+        transport_status({**base, "n_cells": 10, "ref_reproducibility": "fragile"}, cfg)
+        == "insufficient"
+    )
+    assert (
+        transport_status(
+            {**base, "n_cells_supported": 10, "ref_reproducibility": "insufficient"}, cfg
+        )
+        == "insufficient"
+    )
 
 
 def test_boundary_alternative_reports_the_label_across_the_cutoff():
@@ -235,12 +243,26 @@ def test_boundary_alternative_reports_the_label_across_the_cutoff():
     assert boundary and abs(dist - 0.02) < 1e-9 and alt == "shifted"
     # an in-reference shift well below the cutoff keeps its level: across the cutoff the state reads
     # as displaced but coherent (a population beside an intact state), the rule's own reading
-    assert boundary_alternative({**base, "shift_in_reference": 3.5}, cfg)[2] == "supported_with_caution"
+    assert (
+        boundary_alternative({**base, "shift_in_reference": 3.5}, cfg)[2]
+        == "supported_with_caution"
+    )
     dist, boundary, alt = boundary_alternative({**base, "shift": 3.5}, cfg)
     assert not boundary and abs(dist - 0.5) < 1e-9 and alt == ""
-    dist, boundary, alt = boundary_alternative({**base, "shift": 2.03, "shift_in_reference": 2.01}, cfg)
+    dist, boundary, alt = boundary_alternative(
+        {**base, "shift": 2.03, "shift_in_reference": 2.01}, cfg
+    )
     assert boundary and alt == "supported"
-    dist, boundary, alt = boundary_alternative({**base, "shift": 4.04, "shift_level": "high", "shift_in_reference": 4.03, "shift_in_reference_level": "high"}, cfg)
+    dist, boundary, alt = boundary_alternative(
+        {
+            **base,
+            "shift": 4.04,
+            "shift_level": "high",
+            "shift_in_reference": 4.03,
+            "shift_in_reference_level": "high",
+        },
+        cfg,
+    )
     assert boundary and alt == "supported_with_caution"
     dist, boundary, alt = boundary_alternative({**base, "shift": float("nan")}, cfg)
     assert not boundary and alt == "" and np.isnan(dist)
@@ -407,6 +429,11 @@ def test_outputs_and_report(validated_ref, transport_pair, tmp_path):
     )
     text = (out / "report.md").read_text()
     assert "| S1 |" in text and "shifted" in text and "supported" in text
+    assert "## Features" in text and "Retention at or above the floor" in text
+    assert (out / "features.csv").exists()
+    feats = route.features
+    assert feats is not None and len(feats) == len(validated_ref.expression_.genes)
+    assert feats["retained"].all() and route.reference["features"]["retention"] == 1.0
     detached = validate_transport(validated_ref, qry, group_key="donor_id", keep_query=False)
     with pytest.raises(ValueError, match="query AnnData"):
         detached.pseudobulk()
@@ -986,33 +1013,142 @@ def test_donor_level_shift_interval_and_interval_alternative(validated_ref, tran
     from statetrace.transport import interval_alternative
 
     _, qry, _ = transport_pair
-    route = validate_transport(validated_ref, qry, group_key="donor_id", query_state_key="cell_state")
+    route = validate_transport(
+        validated_ref, qry, group_key="donor_id", query_state_key="cell_state"
+    )
     st = route.states
-    assert {"shift_ci_low", "shift_ci_high", "shift_interval_boundary", "status_interval_alternative"} <= set(st.columns)
+    assert {
+        "shift_ci_low",
+        "shift_ci_high",
+        "shift_interval_boundary",
+        "status_interval_alternative",
+    } <= set(st.columns)
     expr = st[(st["shift_source"] == "expression") & (st["groups_scored_expression"] >= 3)]
-    assert len(expr) and np.isfinite(expr["shift_ci_low"]).all() and np.isfinite(expr["shift_ci_high"]).all()
+    assert (
+        len(expr)
+        and np.isfinite(expr["shift_ci_low"]).all()
+        and np.isfinite(expr["shift_ci_high"]).all()
+    )
     # the point median lies inside its own donor-level interval; the interval is never degenerate
-    assert ((expr["shift_ci_low"] <= expr["shift"] + 1e-9) & (expr["shift"] <= expr["shift_ci_high"] + 1e-9)).all()
+    assert (
+        (expr["shift_ci_low"] <= expr["shift"] + 1e-9)
+        & (expr["shift"] <= expr["shift_ci_high"] + 1e-9)
+    ).all()
     assert (expr["shift_ci_high"] > expr["shift_ci_low"]).any()
     # states without an expression-sourced shift or with too few donors carry no interval
     other = st[(st["shift_source"] != "expression") | (st["groups_scored_expression"] < 3)]
     assert other["shift_ci_low"].isna().all() and (~other["shift_interval_boundary"]).all()
-    assert route.reference["shift_interval"] == 0.9 and route.reference["interval_boundary_states"] == int(st["shift_interval_boundary"].sum())
+    assert route.reference["shift_interval"] == 0.9 and route.reference[
+        "interval_boundary_states"
+    ] == int(st["shift_interval_boundary"].sum())
     # the interval is seeded and deterministic; 0 disables it
     again = validate_transport(validated_ref, qry, group_key="donor_id")
     pd.testing.assert_series_equal(again.states["shift_ci_low"], st["shift_ci_low"])
-    off = validate_transport(validated_ref, qry, group_key="donor_id", config=TransportConfig(shift_interval=0.0))
-    assert off.states["shift_ci_low"].isna().all() and (~off.states["shift_interval_boundary"]).all()
+    off = validate_transport(
+        validated_ref, qry, group_key="donor_id", config=TransportConfig(shift_interval=0.0)
+    )
+    assert (
+        off.states["shift_ci_low"].isna().all() and (~off.states["shift_interval_boundary"]).all()
+    )
     with pytest.raises(ValueError, match="shift_interval"):
         TransportConfig(shift_interval=1.0)
     # the alternative is the status at the interval's other end; the status itself is untouched
     cfg = TransportConfig()
     row = dict(st.loc["S2"])
     # the final state table drops the holdout-caution working columns, so the fixed caution basis applies here
-    row.update({"shift": 1.7, "shift_level": "low", "shift_ci_low": 1.2, "shift_ci_high": 2.6, "status": "supported", "caution_basis": "fixed", "recovery_rate": 1.0, "uncertain_fraction": 0.0, "ref_reproducibility": "stable", "ood_fraction": 0.0})
+    row.update(
+        {
+            "shift": 1.7,
+            "shift_level": "low",
+            "shift_ci_low": 1.2,
+            "shift_ci_high": 2.6,
+            "status": "supported",
+            "caution_basis": "fixed",
+            "recovery_rate": 1.0,
+            "uncertain_fraction": 0.0,
+            "ref_reproducibility": "stable",
+            "ood_fraction": 0.0,
+        }
+    )
     boundary, alt = interval_alternative(row, cfg)
-    assert boundary and alt == "supported_with_caution" and transport_status(row, cfg) == "supported"
+    assert (
+        boundary and alt == "supported_with_caution" and transport_status(row, cfg) == "supported"
+    )
     row.update({"shift_ci_low": 1.2, "shift_ci_high": 1.9})
     assert interval_alternative(row, cfg) == (False, "")
     row.update({"shift_ci_low": np.nan, "shift_ci_high": np.nan})
     assert interval_alternative(row, cfg) == (False, "")
+
+
+def test_feature_retention_below_the_floor_is_flagged_and_reported(
+    validated_ref, transport_pair, tmp_path
+):
+    """
+    A query missing a fifth of the expression-space genes: the shift is still read on the
+    retained genes, the retention is flagged against the floor in the provenance and the
+    report, and the flag is a report, not an exclusion (every state keeps a status).
+    """
+    from statetrace import TransportConfig
+
+    _, qry, _ = transport_pair
+    genes = list(validated_ref.expression_.genes)
+    keep = genes[: int(len(genes) * 0.8)]
+    sub = qry[:, qry.var_names.isin(keep)].copy()
+    with pytest.warns(UserWarning, match="reporting floor 90%"):
+        route = validate_transport(validated_ref, sub, group_key="donor_id")
+    f = route.reference["features"]
+    assert f["available"] and f["source"] == "name"
+    assert f["n_space_genes"] == len(genes) and f["n_retained"] == len(keep)
+    assert f["retention"] == pytest.approx(len(keep) / len(genes)) and f["below_floor"]
+    assert f["n_unmapped_space_genes"] == len(genes) - len(keep)
+    assert set(f["unmapped_space_genes"]) <= set(genes) - set(keep)
+    assert route.features["retained"].sum() == len(keep)
+    assert (route.features.loc[~route.features["retained"], "query"] == "").all()
+    assert route.states["status"].notna().all()
+    assert route.reference["expression"]["available"]
+    text = (route.report(tmp_path / "rep") / "report.md").read_text()
+    assert "Retention below the reporting floor" in text and "not an exclusion" in text
+    assert "Expression-space genes not in the query" in text
+
+    import warnings
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        lax = validate_transport(
+            validated_ref,
+            sub,
+            group_key="donor_id",
+            config=TransportConfig(feature_retention_floor=0.75),
+        )
+    assert not any("reporting floor" in str(w.message) for w in rec)
+    assert not lax.reference["features"]["below_floor"]
+    assert lax.reference["features"]["floor"] == 0.75
+    with pytest.raises(ValueError, match="feature_retention_floor"):
+        TransportConfig(feature_retention_floor=1.5)
+
+
+def test_feature_map_source_and_ambiguous_orthologs_are_reported(validated_ref, transport_pair):
+    """A renamed query matched through an ortholog table reports the map as the source."""
+    import pandas as pd
+
+    from statetrace import harmonize_features
+
+    _, qry, _ = transport_pair
+    renamed = qry.copy()
+    renamed.var_names = pd.Index([f"{g}_q" for g in qry.var_names])
+    table = pd.DataFrame(
+        {"reference": list(qry.var_names), "query": [f"{g}_q" for g in qry.var_names]}
+    )
+    # one reference gene mapped to two query features: ambiguous, dropped
+    table = pd.concat(
+        [table, pd.DataFrame({"reference": [qry.var_names[0]], "query": [f"{qry.var_names[1]}_q"]})]
+    )
+    fmap = harmonize_features(qry.var_names, renamed.var_names, ortholog_table=table)
+    assert len(fmap.ambiguous) >= 1
+    route = validate_transport(validated_ref, renamed, group_key="donor_id", feature_map=fmap)
+    f = route.reference["features"]
+    assert f["source"] == "feature_map" and f["n_ambiguous"] == len(fmap.ambiguous)
+    assert f["n_retained"] == f["n_space_genes"] - sum(
+        g in fmap.ambiguous for g in validated_ref.expression_.genes
+    )
+    assert route.features["query"].str.endswith("_q").sum() == f["n_retained"]

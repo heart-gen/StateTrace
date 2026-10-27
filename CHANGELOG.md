@@ -14,6 +14,13 @@ differ only by the new columns.
 
 ### Added
 
+- **Feature-retention reporting.** `TransportConfig.feature_retention_floor` (0.9) replaces
+  the hard-coded 90 % warning; `route.features` (one row per expression-space gene: the query
+  feature it matched and whether it was retained; `features.csv` in the report directory) and
+  `route.reference["features"]` (retention, floor, `below_floor`, the first unmapped genes,
+  ambiguous orthologs dropped through a `FeatureMap`); `route.report()` gains a *Features*
+  section that names the flag next to the expression shifts. Reported only: the status rule
+  never reads it.
 - **Donor-level shift interval.** `TransportConfig.shift_interval` (0.90; 0 disables),
   `shift_interval_draws` (1000), `shift_interval_seed` (0) and `shift_interval_min_groups` (3):
   a percentile bootstrap over query donors of the median donor x state shift in the frozen

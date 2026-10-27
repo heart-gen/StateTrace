@@ -243,7 +243,9 @@ simple rules a careful analyst already uses.
   expression-space power survives when donor effects are only partly shared across states;
   record the answer in the docs and the transport report's caveats.
 - Group-aware calibration tables: a backend's confidence against recovery in an unseen donor.
-- Feature-retention reporting in `route.report()`.
+- Feature-retention reporting in `route.report()`. Built 2026-10-27 on `v0.3-dev`
+  (`TransportConfig.feature_retention_floor`, `route.features`, `route.reference["features"]`,
+  the report's *Features* section; a flag, never an exclusion).
 - Donor-level shift interval: the frozen-expression shift computed per query donor, the state's
   level read from the interval across donors, and the boundary flag derived from that interval
   rather than the fixed `shift_tolerance` (recorded 2026-10-25 from the G2 stage-03 reading).
