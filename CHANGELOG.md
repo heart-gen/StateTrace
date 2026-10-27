@@ -5,10 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 0.3.0.dev0
+## [0.3.0] - 2026-10-27
 
 Reporting additions recorded on the roadmap after the G2 reading (benchmark `GATES.md`,
-2026-10-25): margins and a consensus for the application stages. No change to reference
+2026-10-25): margins and a consensus for the application stages. Released for the benchmark's
+application stages (stage 06 onwards; PI decision 2026-10-27): stages 03-05 keep their 0.2.1
+records (G2, G3 read on `53f7af0`) and are not rerun on this release. No change to reference
 validation, novelty scores, the shift statistics or the status rule; records written by 0.2.1
 differ only by the new columns.
 
