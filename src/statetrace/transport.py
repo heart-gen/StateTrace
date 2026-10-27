@@ -98,6 +98,10 @@ STATE_COLUMNS = (
     "shift_cutoff_distance",
     "shift_boundary",
     "status_alternative",
+    "shift_ci_low",
+    "shift_ci_high",
+    "shift_interval_boundary",
+    "status_interval_alternative",
 )
 
 
@@ -194,6 +198,21 @@ class TransportConfig:
         status is unchanged. Two mappers whose assignments move a state's pseudobulk across a
         cutoff differ in label, not in evidence; the flag lets a consumer read label agreement
         within the tolerance.
+    shift_interval, shift_interval_draws, shift_interval_seed, shift_interval_min_groups
+        A donor-level interval on the deciding shift when it comes from the expression space:
+        the percentile bootstrap over query donors (``shift_interval_draws`` resamples, seeded)
+        of the median donor x state shift, at confidence ``shift_interval`` (0 disables), for
+        states scored in at least ``shift_interval_min_groups`` donors. ``shift_ci_low`` /
+        ``shift_ci_high`` carry it; ``shift_interval_boundary`` is set when the interval
+        straddles ``shift_moderate`` or ``shift_high`` and ``status_interval_alternative`` is
+        the status at the other end of the interval. A data-driven margin next to the fixed
+        ``shift_tolerance``; reported only, the status is unchanged (0.3).
+    feature_retention_floor
+        Fraction of the frozen expression space's genes that must be found in the query for
+        the expression shift to be read without a flag (0.9). Below it the shift is still
+        computed on the retained genes against a null built on all of them, a warning is
+        raised and ``route.reference["features"]["below_floor"]`` is set; the report names
+        the flag and the missing genes. Reported only: never an exclusion (0.3).
     shift_source
         ``"auto"`` uses the frozen expression space when the reference carries one and the
         query has its genes, else the mapping latent; ``"expression"`` or ``"latent"`` force
@@ -256,6 +275,11 @@ class TransportConfig:
     shift_moderate: float = 2.0
     shift_high: float = 4.0
     shift_tolerance: float = 0.05
+    shift_interval: float = 0.90
+    shift_interval_draws: int = 1000
+    shift_interval_seed: int = 0
+    shift_interval_min_groups: int = 3
+    feature_retention_floor: float = 0.9
     require_reference_validation: bool = True
     correct_cohort_offset: bool = True
     latent_group_offset: bool = True
@@ -271,6 +295,14 @@ class TransportConfig:
             raise ValueError("shift_source must be 'auto', 'expression' or 'latent'")
         if self.shift_tolerance < 0:
             raise ValueError("shift_tolerance must be >= 0")
+        if not (0.0 <= self.shift_interval < 1.0):
+            raise ValueError(
+                "shift_interval must be in [0, 1); 0 disables the donor-level interval"
+            )
+        if self.shift_interval_draws < 0 or self.shift_interval_min_groups < 2:
+            raise ValueError("shift_interval_draws must be >= 0 and shift_interval_min_groups >= 2")
+        if not (0.0 <= self.feature_retention_floor <= 1.0):
+            raise ValueError("feature_retention_floor must be in [0, 1]")
         if self.ood_rule not in novelty.OOD_RULES:
             raise ValueError(f"ood_rule must be one of {novelty.OOD_RULES}")
         if self.ood_score not in novelty.OOD_SCORES:
@@ -362,9 +394,34 @@ def boundary_alternative(row: pd.Series | dict, cfg: TransportConfig) -> tuple[f
     # the in-reference shift crosses with it when it sits within the tolerance of the same cutoff on
     # the same side (it usually tracks the deciding shift closely); a distant one keeps its level
     in_ref = float(row.get("shift_in_reference", np.nan))
-    if np.isfinite(in_ref) and abs(in_ref - cut) <= cfg.shift_tolerance and (in_ref < cut) == (shift < cut):
+    if (
+        np.isfinite(in_ref)
+        and abs(in_ref - cut) <= cfg.shift_tolerance
+        and (in_ref < cut) == (shift < cut)
+    ):
         alt_row["shift_in_reference_level"] = alt
     return float(dist), True, transport_status(alt_row, cfg)
+
+
+def interval_alternative(row: pd.Series | dict, cfg: TransportConfig) -> tuple[bool, str]:
+    """
+    Whether the donor-level interval of a state's deciding ``shift`` (``shift_ci_low``,
+    ``shift_ci_high``) straddles a cutoff (``shift_interval_boundary``) and, if so, the status
+    the state would carry with the shift level at the other end of the interval
+    (``status_interval_alternative``; ``""`` when it equals the status or no interval exists).
+    The status itself is never changed here.
+    """
+    lo = float(row.get("shift_ci_low", np.nan))
+    hi = float(row.get("shift_ci_high", np.nan))
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        return False, ""
+    lv = novelty.shift_level(np.array([lo, hi]), moderate=cfg.shift_moderate, high=cfg.shift_high)
+    if lv[0] == lv[1]:
+        return False, ""
+    status = row["status"] if "status" in row else transport_status(row, cfg)
+    other = lv[1] if row.get("shift_level") == lv[0] else lv[0]
+    alt = transport_status({**dict(row), "shift_level": other}, cfg)
+    return True, (alt if alt != status else "")
 
 
 def _displaced(row: pd.Series | dict, cfg: TransportConfig) -> bool:
@@ -433,6 +490,11 @@ class TransportRoute:
         (``None`` unless ``TransportConfig.two_sample`` was set); see
         :func:`statetrace.twosample.state_tests`. Reported evidence only: never an input to
         ``status``.
+    features
+        One row per gene of the frozen expression space: ``reference`` (the gene), ``query``
+        (the query feature it was matched to, ``""`` when none) and ``retained`` (``None``
+        when the reference carries no expression space). The summary, with the retention
+        against ``TransportConfig.feature_retention_floor``, is ``route.reference["features"]``.
     """
 
     group_key: str
@@ -447,6 +509,7 @@ class TransportRoute:
     query: Any = field(default=None, repr=False)
     expression: pd.DataFrame | None = field(default=None, repr=False)
     two_sample: pd.DataFrame | None = field(default=None, repr=False)
+    features: pd.DataFrame | None = field(default=None, repr=False)
 
     @property
     def supported_states(self) -> list[str]:
@@ -617,10 +680,18 @@ def _expression_shift(
     in_reference: np.ndarray,
     cfg: TransportConfig,
     feature_map: FeatureMap | None,
-) -> tuple[pd.DataFrame | None, dict[str, Any], pd.DataFrame | None, dict[str, Any] | None]:
+) -> tuple[
+    pd.DataFrame | None,
+    dict[str, Any],
+    pd.DataFrame | None,
+    dict[str, Any] | None,
+    pd.DataFrame,
+    dict[str, Any],
+]:
     """
     Score query donor x state pseudobulks (all assigned cells, and in-reference cells only)
-    and, when ``cfg.two_sample`` is set, run the two-sample engines on the same genes.
+    and, when ``cfg.two_sample`` is set, run the two-sample engines on the same genes. Also
+    returns the per-gene feature table of the expression space and its retention summary.
     """
     from .features import harmonize_features
 
@@ -628,6 +699,9 @@ def _expression_shift(
     assert space is not None
     fmap = feature_map or harmonize_features(space.genes, query.var_names)
     mapping = fmap.mapping[fmap.mapping["reference"].isin(space.genes)]
+    feat_table, feat_prov = _feature_summary(
+        space.genes, mapping, fmap, cfg, source="feature_map" if feature_map is not None else "name"
+    )
     if len(mapping) == 0:
         warnings.warn(
             "none of the reference expression-space genes are in the query; expression shift "
@@ -635,17 +709,25 @@ def _expression_shift(
             UserWarning,
             stacklevel=3,
         )
-        return None, {"available": False, "feature_retention": 0.0}, None, None
+        return (
+            None,
+            {"available": False, "feature_retention": 0.0},
+            None,
+            None,
+            feat_table,
+            feat_prov,
+        )
     gene_pos = pd.Index(space.genes).get_indexer(mapping["reference"].to_numpy())
     order = np.argsort(gene_pos)
     gene_pos = gene_pos[order]
     q_cols = query.var_names.get_indexer(mapping["query"].to_numpy()[order])
     retention = len(gene_pos) / space.n_genes
-    if retention < 0.9:
+    if retention < cfg.feature_retention_floor:
         warnings.warn(
-            f"only {retention:.0%} of the reference expression-space genes are in the query; "
-            "pseudobulk distances are computed on the retained genes and compared with a null "
-            "built on all of them.",
+            f"only {retention:.0%} of the reference expression-space genes are in the query "
+            f"(reporting floor {cfg.feature_retention_floor:.0%}); pseudobulk distances are "
+            "computed on the retained genes and compared with a null built on all of them. "
+            "Reported in route.reference['features']; not an exclusion.",
             UserWarning,
             stacklevel=3,
         )
@@ -683,7 +765,52 @@ def _expression_shift(
             correct_cohort_offset=cfg.correct_cohort_offset,
             config=cfg.two_sample,
         )
-    return table, prov, two_table, two_prov
+    return table, prov, two_table, two_prov, feat_table, feat_prov
+
+
+def _feature_summary(
+    space_genes: Any,
+    mapping: pd.DataFrame,
+    fmap: FeatureMap,
+    cfg: TransportConfig,
+    *,
+    source: str,
+    n_list: int = 20,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Per-gene table of the frozen expression space (reference gene, matched query feature,
+    retained) and the retention summary read against ``cfg.feature_retention_floor``.
+    Reported only: the status rule never reads it.
+    """
+    genes = pd.Index(np.asarray(space_genes).astype(str))
+    matched = pd.Series(
+        mapping["query"].to_numpy().astype(str), index=mapping["reference"].to_numpy().astype(str)
+    )
+    table = pd.DataFrame(
+        {
+            "reference": genes.to_numpy(),
+            "query": matched.reindex(genes).fillna("").to_numpy(),
+            "retained": genes.isin(matched.index),
+        }
+    )
+    n_retained = int(table["retained"].sum())
+    retention = n_retained / len(genes) if len(genes) else float("nan")
+    unmapped = sorted(table.loc[~table["retained"], "reference"].tolist())
+    prov: dict[str, Any] = {
+        "available": True,
+        "source": source,
+        "n_space_genes": int(len(genes)),
+        "n_retained": n_retained,
+        "retention": float(retention),
+        "floor": float(cfg.feature_retention_floor),
+        "below_floor": bool(np.isfinite(retention) and retention < cfg.feature_retention_floor),
+        "n_unmapped_space_genes": len(unmapped),
+        "unmapped_space_genes": unmapped[:n_list],
+        "n_ambiguous": int(len(fmap.ambiguous)),
+        "n_reference_features": int(fmap.n_reference),
+        "n_query_features": int(fmap.n_query),
+    }
+    return table, prov
 
 
 def _check_independence(
@@ -964,14 +1091,27 @@ def validate_transport(
     expr_prov: dict[str, Any] = {"available": False}
     two_table: pd.DataFrame | None = None
     two_prov: dict[str, Any] | None = None
+    feat_table: pd.DataFrame | None = None
+    feat_prov: dict[str, Any] = {
+        "available": False,
+        "reason": (
+            "no frozen expression space on the reference"
+            if reference.expression_ is None
+            else "expression shift not requested"
+            if cfg.shift_source not in ("auto", "expression")
+            else "query has no features"
+        ),
+    }
     expr_shift = np.full(len(states), np.nan)
     expr_shift_in = np.full(len(states), np.nan)
     expr_shift_raw = np.full(len(states), np.nan)
+    expr_ci_lo = np.full(len(states), np.nan)
+    expr_ci_hi = np.full(len(states), np.nan)
     groups_shifted = np.zeros(len(states), dtype=int)
     groups_scored = np.zeros(len(states), dtype=int)
     want_expr = cfg.shift_source in ("auto", "expression")
     if want_expr and reference.expression_ is not None and query.n_vars > 0:
-        expr_table, expr_prov, two_table, two_prov = _expression_shift(
+        expr_table, expr_prov, two_table, two_prov, feat_table, feat_prov = _expression_shift(
             reference, query, group_codes_q, group_names_q, codes, in_ref, cfg, feature_map
         )
         if expr_table is not None:
@@ -981,6 +1121,15 @@ def validate_transport(
                 all_rows, len(states), high=cfg.shift_high
             )
             expr_shift_in, _, _ = _expr.summarise_states(in_rows, len(states), high=cfg.shift_high)
+            if cfg.shift_interval > 0:
+                expr_ci_lo, expr_ci_hi = _expr.summarise_state_intervals(
+                    all_rows,
+                    len(states),
+                    level=cfg.shift_interval,
+                    draws=cfg.shift_interval_draws,
+                    seed=cfg.shift_interval_seed,
+                    min_groups=cfg.shift_interval_min_groups,
+                )
             expr_shift_raw, _, _ = _expr.summarise_states(
                 all_rows.drop(columns="shift_z").rename(columns={"shift_z_raw": "shift_z"}),
                 len(states),
@@ -1258,6 +1407,12 @@ def validate_transport(
     st["shift_cutoff_distance"] = [d for d, _, _ in boundary]
     st["shift_boundary"] = [b for _, b, _ in boundary]
     st["status_alternative"] = [a for _, _, a in boundary]
+    # the donor-level interval exists for the expression-sourced shift only (per-donor profiles)
+    st["shift_ci_low"] = np.where(use_expr, expr_ci_lo, np.nan)
+    st["shift_ci_high"] = np.where(use_expr, expr_ci_hi, np.nan)
+    interval = [interval_alternative(row, cfg) for _, row in st.iterrows()]
+    st["shift_interval_boundary"] = [b for b, _ in interval]
+    st["status_interval_alternative"] = [a for _, a in interval]
     st.index.name = "state"
     st = st[list(STATE_COLUMNS)]
     cells = cells.drop(columns="_supported_label")
@@ -1310,6 +1465,8 @@ def validate_transport(
             "caution_states_holdout": int((st["caution_basis"] == "holdout").sum()),
             "shift_tolerance": cfg.shift_tolerance,
             "boundary_states": int(st["shift_boundary"].sum()),
+            "shift_interval": cfg.shift_interval,
+            "interval_boundary_states": int(st["shift_interval_boundary"].sum()),
             "population_calibration": (
                 "holdout"
                 if cfg.population_calibration == "holdout"
@@ -1328,6 +1485,7 @@ def validate_transport(
                 else None
             ),
             "expression": expr_prov,
+            "features": feat_prov,
             "two_sample": two_prov,
             "independence": independence,
         },
@@ -1336,6 +1494,7 @@ def validate_transport(
         query=query if keep_query else None,
         expression=expr_table,
         two_sample=two_table,
+        features=feat_table,
     )
     logger.info("transport: %s", route.summary().replace("\n", " | "))
     return route
@@ -1350,6 +1509,8 @@ def route_to_dir(route: TransportRoute, path: str | Path, *, include_cells: bool
         route.cells.to_csv(path / "cells.csv.gz", index_label="cell")
     if route.two_sample is not None:
         route.two_sample.to_csv(path / "two_sample.csv", index=False)
+    if route.features is not None:
+        route.features.to_csv(path / "features.csv", index=False)
     (path / "config.json").write_text(
         json.dumps(
             {

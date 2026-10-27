@@ -243,13 +243,20 @@ simple rules a careful analyst already uses.
   expression-space power survives when donor effects are only partly shared across states;
   record the answer in the docs and the transport report's caveats.
 - Group-aware calibration tables: a backend's confidence against recovery in an unseen donor.
-- Feature-retention reporting in `route.report()`.
+- Feature-retention reporting in `route.report()`. Built 2026-10-27 on `v0.3-dev`
+  (`TransportConfig.feature_retention_floor`, `route.features`, `route.reference["features"]`,
+  the report's *Features* section; a flag, never an exclusion).
 - Donor-level shift interval: the frozen-expression shift computed per query donor, the state's
   level read from the interval across donors, and the boundary flag derived from that interval
   rather than the fixed `shift_tolerance` (recorded 2026-10-25 from the G2 stage-03 reading).
+  Built 2026-10-26 on `v0.3-dev` (`TransportConfig.shift_interval`, `shift_ci_low` /
+  `shift_ci_high`, `shift_interval_boundary`, `status_interval_alternative`; reported only).
 - Consensus transport status across backends (`Predictions` from several mappers of the same
   query): the modal status with the per-backend statuses and their agreement reported as its
   reliability; an application-stage mode, never a substitute for the per-backend criterion.
+  Built 2026-10-26 on `v0.3-dev` (`robustness.consensus_status`; `compare_backends(...,
+  tolerance=)` reads exact agreement, agreement within the cutoff or the interval margin, and
+  the consensus with its support).
 - Downstream helpers needed for U2: the replication model (`replication ~ cell_confidence +
   cell_number + donor_number + integration_score + StateTrace`) is a benchmark analysis, but
   the software must export the per-state terms it uses in one table.
@@ -265,6 +272,10 @@ G3 repeats G2 on brain with pathology-stratum stability.
 ### Expected artifacts
 
 `03_pbmc/_m/`, `04_hlca/_m/`, `05_brain/_m/`, `G2.md`, `U2.md`, `G3.md`, tags v0.2.x and v0.3.0.
+G3 passed on v0.2.1 (`53f7af0`, 2026-10-26). Decided by the PI on 2026-10-27: v0.3.0 is
+released and installed before the first application stage (benchmark stage 06); stages 03-05
+keep the v0.2.1 records their gates were read on, with the version stated per stage, and are
+not rerun before G4. The v0.3 additions change what is reported, not the status rule.
 
 ## Stage 4: inference validity and G4
 

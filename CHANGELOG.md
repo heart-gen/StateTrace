@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 0.3.0.dev0
+
+Reporting additions recorded on the roadmap after the G2 reading (benchmark `GATES.md`,
+2026-10-25): margins and a consensus for the application stages. No change to reference
+validation, novelty scores, the shift statistics or the status rule; records written by 0.2.1
+differ only by the new columns.
+
+### Added
+
+- **Feature-retention reporting.** `TransportConfig.feature_retention_floor` (0.9) replaces
+  the hard-coded 90 % warning; `route.features` (one row per expression-space gene: the query
+  feature it matched and whether it was retained; `features.csv` in the report directory) and
+  `route.reference["features"]` (retention, floor, `below_floor`, the first unmapped genes,
+  ambiguous orthologs dropped through a `FeatureMap`); `route.report()` gains a *Features*
+  section that names the flag next to the expression shifts. Reported only: the status rule
+  never reads it.
+- **Donor-level shift interval.** `TransportConfig.shift_interval` (0.90; 0 disables),
+  `shift_interval_draws` (1000), `shift_interval_seed` (0) and `shift_interval_min_groups` (3):
+  a percentile bootstrap over query donors of the median donor x state shift in the frozen
+  expression space (`expression.summarise_state_intervals`). State columns `shift_ci_low`,
+  `shift_ci_high`, `shift_interval_boundary` (the interval straddles `shift_moderate` or
+  `shift_high`) and `status_interval_alternative` (the status at the interval's other end);
+  `route.reference["interval_boundary_states"]`. A data-driven margin next to the fixed
+  `shift_tolerance`; reported only.
+- **Consensus transport status across backends.** `robustness.consensus_status` and
+  `compare_backends(..., tolerance="cutoff" | "interval" | "none")`: the status table gains
+  `consensus_support` (fraction of backends carrying the modal status),
+  `agreement_within_tolerance` and `consensus_within_tolerance` (a label consistent with every
+  backend, each accepting its status or its reported alternative); `BackendComparison`
+  exposes `status_agreement` and `status_agreement_within_tolerance` and prints both. An
+  application-stage reading with its reliability stated, never a substitute for the
+  per-backend status or for a criterion read on exact agreement.
+
 ## [0.2.1] - 2026-10-23
 
 Status rule and reporting changes from the first real-data transport runs (benchmark stage 03,

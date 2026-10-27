@@ -143,6 +143,8 @@ least `min_confidence` when a confidence exists, out-of-reference fraction at mo
 | `query_recall` | only when query labels are given (benchmarks) |
 | `status` | the gating decision |
 | `shift_cutoff_distance`, `shift_boundary`, `status_alternative` | distance of the deciding `shift` to the nearest cutoff; whether it lies within `shift_tolerance` (0.05) of one; the status the state would carry with its shift on the other side of that cutoff (`""` otherwise). Reported only: the status is unchanged |
+| *(route level)* `route.reference["features"]`, `route.features` | feature retention of the frozen expression space in the query, read against `feature_retention_floor` (0.9), with the per-gene table; a flag carried next to the expression shifts, never an exclusion (0.3) |
+| `shift_ci_low`, `shift_ci_high`, `shift_interval_boundary`, `status_interval_alternative` | the donor-level interval of the deciding shift when it comes from the expression space: a percentile bootstrap over query donors of the median donor x state shift at confidence `shift_interval` (0.90; `nan` below `shift_interval_min_groups` donors); whether the interval straddles a cutoff; the status at the other end of the interval (`""` when it equals the status). A data-driven margin next to the fixed tolerance; reported only (0.3) |
 
 ## Status rules (evaluated in order)
 
@@ -160,7 +162,16 @@ the raw columns, not tuned to make a state pass. The shift cutoffs cut a continu
 two mappers whose assignments move a state's pseudobulk a few hundredths of a standard
 deviation across a cutoff differ in label, not in evidence. `shift_boundary` and
 `status_alternative` carry that margin so a consumer can read label agreement within
-`shift_tolerance` next to exact agreement; neither changes the status. `caution_reasons` lists the triggers a
+`shift_tolerance` next to exact agreement; neither changes the status. The donor-level
+interval (`shift_ci_low`, `shift_ci_high`, from the per-donor pseudobulk shifts) gives the same
+margin as a property of the query cohort rather than of a fixed tolerance: a state whose
+interval straddles a cutoff is `shift_interval_boundary`, with `status_interval_alternative`
+the label at the interval's other end. With several mappers,
+{func}`~statetrace.compare_backends` reads exact status agreement, agreement within either
+margin (`tolerance="cutoff"` or `"interval"`) and a consensus status with its support across
+backends ({func}`~statetrace.robustness.consensus_status`); the consensus is an
+application-stage reading with its reliability stated, never a substitute for the per-backend
+status. `caution_reasons` lists the triggers a
 cautioned state met (`novel_population`, `reproducibility`, `recovery`, `uncertainty`,
 `shift`, `no_confidence`).
 
@@ -229,8 +240,14 @@ upper-tail probability against that null). The `groups` table carries `expressio
 Genes are harmonised by name with the expression space's genes, or through a
 {class}`~statetrace.FeatureMap` from an ortholog table (`feature_map=`). When genes are
 missing the distance is computed on the retained genes and compared with a null built on all
-of them; a warning is raised below 90 % retention and the retention is recorded in
-`route.reference["expression"]`.
+of them. `route.features` lists every expression-space gene with the query feature it was
+matched to and whether it was retained (`features.csv` in the report directory), and
+`route.reference["features"]` carries the summary: `n_retained` / `n_space_genes`,
+`retention`, the `floor` (`TransportConfig.feature_retention_floor`, 0.9), `below_floor`, the
+first unmapped genes and, through a feature map, the number of ambiguous orthologs dropped.
+Below the floor a warning is raised and the report's *Features* section names the flag next to
+the expression shifts. The floor is a reporting flag, never an exclusion: the status rule does
+not read it (0.3).
 
 ## Two-sample engines (reported, not decisive)
 

@@ -66,10 +66,59 @@ def _two_sample_section(route: TransportRoute) -> list[str]:
     return lines
 
 
+def _features_section(route: TransportRoute) -> list[str]:
+    """
+    Feature harmonisation between the frozen expression space and the query: retained genes,
+    the retention against the reporting floor, and the missing genes. The floor is a flag the
+    reader carries next to every expression shift; it never excludes a state or a cohort.
+    """
+    f = route.reference.get("features") or {}
+    lines = ["## Features", ""]
+    if not f.get("available"):
+        lines += [
+            "Feature harmonisation does not apply: "
+            f"{f.get('reason', 'the expression-space diagnostic did not run')}.",
+            "",
+        ]
+        return lines
+    how = (
+        "matched by name"
+        if f.get("source") == "name"
+        else f"matched through the feature map ({f.get('n_ambiguous', 0)} ambiguous dropped)"
+    )
+    lines += [
+        f"{f['n_retained']}/{f['n_space_genes']} expression-space genes found in the query "
+        f"({f['retention']:.1%} retention, {how}; reporting floor {f['floor']:.0%}). "
+        + (
+            "**Retention below the reporting floor**: pseudobulk distances are computed on the "
+            "retained genes and compared with a null built on all of them, so every expression "
+            "shift above carries this flag. Reported only: not an exclusion."
+            if f.get("below_floor")
+            else "Retention at or above the floor."
+        ),
+        "",
+    ]
+    if f.get("n_unmapped_space_genes"):
+        shown = f.get("unmapped_space_genes") or []
+        more = f["n_unmapped_space_genes"] - len(shown)
+        lines += [
+            f"Expression-space genes not in the query ({f['n_unmapped_space_genes']}"
+            + (f", first {len(shown)} shown" if more > 0 else "")
+            + "): "
+            + ", ".join(f"`{g}`" for g in shown)
+            + ("; the full list is in `features.csv`." if more > 0 else "."),
+            "",
+        ]
+    return lines
+
+
 def write_report(
     route: TransportRoute, output_dir: str | Path, *, include_cells: bool = True
 ) -> Path:
-    """Write ``states.csv``, ``groups.csv``, ``cells.csv.gz``, ``config.json`` and ``report.md``."""
+    """
+    Write ``states.csv``, ``groups.csv``, ``cells.csv.gz``, ``features.csv``, ``config.json``
+    and ``report.md``.
+    """
     from .transport import route_to_dir
 
     out = route_to_dir(route, output_dir, include_cells=include_cells)
@@ -91,9 +140,18 @@ def write_report(
             "novel_population",
             "status",
             "status_alternative",
+            "status_interval_alternative",
             "caution_reasons",
         ]
     ].copy()
+    show.insert(
+        show.columns.get_loc("status_interval_alternative"),
+        "shift_ci",
+        [
+            f"{lo:.1f}-{hi:.1f}" if np.isfinite(lo) and np.isfinite(hi) else ""
+            for lo, hi in zip(st["shift_ci_low"], st["shift_ci_high"], strict=True)
+        ],
+    )
     show["groups_recovered"] = (
         show["groups_recovered"].astype(str) + "/" + show["query_groups"].astype(str)
     )
@@ -157,8 +215,14 @@ def write_report(
         "held-out reference donors in the frozen expression space; `latent`: centroid shift in "
         "per-dimension reference sd in the mapping latent; both after cohort-offset removal); "
         "query donors whose pseudobulk lies at or beyond the high-shift threshold (of donors "
-        "scored); whether an out-of-reference population sits next to the state.",
+        "scored); whether an out-of-reference population sits next to the state; the status, "
+        "the status the state would carry with its shift on the other side of the nearest "
+        "cutoff when within `shift_tolerance` of it, the donor-level interval of the shift "
+        "(bootstrap over query donors) and the status at its other end when the interval "
+        "straddles a cutoff. The alternatives and the interval are reported margins; neither "
+        "changes the status.",
         "",
+        *_features_section(route),
         "## Coordinate systems",
         "",
         "State identity (label, confidence, per-cell reference distance) comes from the mapping "

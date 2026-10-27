@@ -936,6 +936,43 @@ def score_query(
     return table, prov
 
 
+def summarise_state_intervals(
+    table: pd.DataFrame,
+    n_states: int,
+    *,
+    level: float = 0.90,
+    draws: int = 1000,
+    seed: int = 0,
+    min_groups: int = 3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Donor-level interval on the per-state shift: a percentile bootstrap over query donors of
+    the median ``shift_z`` (the statistic :func:`summarise_states` reports), at confidence
+    ``level``. States scored in fewer than ``min_groups`` donors get ``nan``. The interval is
+    reported next to the point median and never changes a status; with few donors it is wide,
+    which is the point: the label's margin is then a property of the cohort, not of a fixed
+    tolerance.
+    """
+    lo = np.full(n_states, np.nan)
+    hi = np.full(n_states, np.nan)
+    if len(table) == 0 or draws <= 0 or not (0.0 < level < 1.0):
+        return lo, hi
+    rng = np.random.default_rng(seed)
+    st = table["state"].to_numpy()
+    z = table["shift_z"].to_numpy(dtype=float)
+    a = (1.0 - level) / 2.0
+    for k in range(n_states):
+        sel = (st == k) & np.isfinite(z)
+        n = int(sel.sum())
+        if n < min_groups:
+            continue
+        vals = z[sel]
+        idx = rng.integers(0, n, size=(int(draws), n))
+        meds = np.median(vals[idx], axis=1)
+        lo[k], hi[k] = np.quantile(meds, [a, 1.0 - a])
+    return lo, hi
+
+
 def summarise_states(
     table: pd.DataFrame, n_states: int, *, high: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
