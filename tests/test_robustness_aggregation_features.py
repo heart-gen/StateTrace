@@ -96,27 +96,62 @@ def test_consensus_status_reads_agreement_within_the_reported_margin():
     from statetrace.robustness import consensus_status
 
     status = pd.DataFrame(
-        {"a": ["supported", "shifted", "insufficient", "supported"], "b": ["supported", "supported_with_caution", "absent", "supported"], "c": ["supported_with_caution", "shifted", "absent", "supported"]},
+        {
+            "a": ["supported", "shifted", "insufficient", "supported"],
+            "b": ["supported", "supported_with_caution", "absent", "supported"],
+            "c": ["supported_with_caution", "shifted", "absent", "supported"],
+        },
         index=pd.Index(["B", "CD4", "Mega", "Mono"], name="state"),
     )
     alt = pd.DataFrame(
-        {"a": ["supported_with_caution", "", "", ""], "b": ["supported_with_caution", "shifted", "", ""], "c": ["", "", "", ""]},
+        {
+            "a": ["supported_with_caution", "", "", ""],
+            "b": ["supported_with_caution", "shifted", "", ""],
+            "c": ["", "", "", ""],
+        },
         index=status.index,
     )
     out = consensus_status(status, alt)
-    assert list(out.loc["Mono", ["status_agreement", "consensus", "consensus_support", "agreement_within_tolerance", "consensus_within_tolerance"]]) == [True, "supported", 1.0, True, "supported"]
+    assert list(
+        out.loc[
+            "Mono",
+            [
+                "status_agreement",
+                "consensus",
+                "consensus_support",
+                "agreement_within_tolerance",
+                "consensus_within_tolerance",
+            ],
+        ]
+    ) == [True, "supported", 1.0, True, "supported"]
     # B: two supported, one caution; a and b sit at the cutoff (alternative caution), so caution is consistent with every backend
-    assert not out.loc["B", "status_agreement"] and out.loc["B", "consensus"] == "supported" and out.loc["B", "consensus_support"] == pytest.approx(2 / 3)
-    assert out.loc["B", "agreement_within_tolerance"] and out.loc["B", "consensus_within_tolerance"] == "supported_with_caution"
+    assert (
+        not out.loc["B", "status_agreement"]
+        and out.loc["B", "consensus"] == "supported"
+        and out.loc["B", "consensus_support"] == pytest.approx(2 / 3)
+    )
+    assert (
+        out.loc["B", "agreement_within_tolerance"]
+        and out.loc["B", "consensus_within_tolerance"] == "supported_with_caution"
+    )
     # with only a at the cutoff, b (supported, no alternative) and c (caution) still disagree
     one = alt.copy()
     one.loc["B", "b"] = ""
     assert not consensus_status(status, one).loc["B", "agreement_within_tolerance"]
     # CD4: b's alternative is shifted, which a and c carry
-    assert out.loc["CD4", "agreement_within_tolerance"] and out.loc["CD4", "consensus_within_tolerance"] == "shifted"
+    assert (
+        out.loc["CD4", "agreement_within_tolerance"]
+        and out.loc["CD4", "consensus_within_tolerance"] == "shifted"
+    )
     # Mega: a real disagreement (no alternative bridges it)
-    assert not out.loc["Mega", "agreement_within_tolerance"] and out.loc["Mega", "consensus_within_tolerance"] is None and out.loc["Mega", "consensus"] == "absent"
-    assert out["agreement_within_tolerance"].mean() == 0.75 and out["status_agreement"].mean() == 0.25
+    assert (
+        not out.loc["Mega", "agreement_within_tolerance"]
+        and out.loc["Mega", "consensus_within_tolerance"] is None
+        and out.loc["Mega", "consensus"] == "absent"
+    )
+    assert (
+        out["agreement_within_tolerance"].mean() == 0.75 and out["status_agreement"].mean() == 0.25
+    )
     # without alternatives, within-tolerance agreement is exact agreement
     exact = consensus_status(status)
     assert (exact["agreement_within_tolerance"] == exact["status_agreement"]).all()
@@ -125,15 +160,30 @@ def test_consensus_status_reads_agreement_within_the_reported_margin():
 def test_compare_backends_consensus_columns(validated_ref, transport_pair):
     _, qry, _ = transport_pair
     r15 = validate_transport(validated_ref, qry, group_key="donor_id")
-    b5 = KNNBackend(n_neighbors=5).fit(validated_ref.latent_, validated_ref.states_[validated_ref.state_codes_])
+    b5 = KNNBackend(n_neighbors=5).fit(
+        validated_ref.latent_, validated_ref.states_[validated_ref.state_codes_]
+    )
     P = b5.predict_proba(qry.obsm["X_latent"])
-    p5 = Predictions.from_arrays(qry.obs_names, b5.classes_[P.argmax(axis=1)], proba=P, states=list(b5.classes_), backend="knn5")
+    p5 = Predictions.from_arrays(
+        qry.obs_names,
+        b5.classes_[P.argmax(axis=1)],
+        proba=P,
+        states=list(b5.classes_),
+        backend="knn5",
+    )
     r5 = validate_transport(validated_ref, qry, group_key="donor_id", predictions=p5)
     for tol in ("cutoff", "interval", "none"):
         cmp_ = compare_backends({"knn15": r15, "knn5": r5}, tolerance=tol)
         t = cmp_.status_table
-        assert {"consensus", "consensus_support", "agreement_within_tolerance", "consensus_within_tolerance"} <= set(t.columns)
+        assert {
+            "consensus",
+            "consensus_support",
+            "agreement_within_tolerance",
+            "consensus_within_tolerance",
+        } <= set(t.columns)
         assert cmp_.status_agreement_within_tolerance >= cmp_.status_agreement
-        assert t["consensus_support"].between(0.5, 1.0).all() and "consensus status" in cmp_.summary()
+        assert (
+            t["consensus_support"].between(0.5, 1.0).all() and "consensus status" in cmp_.summary()
+        )
     with pytest.raises(ValueError, match="tolerance"):
         compare_backends({"knn15": r15, "knn5": r5}, tolerance="loose")

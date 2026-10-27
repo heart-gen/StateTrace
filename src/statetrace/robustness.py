@@ -18,9 +18,7 @@ from .predictions import Predictions
 from .transport import TransportRoute
 
 
-def consensus_status(
-    status: pd.DataFrame, alternative: pd.DataFrame | None = None
-) -> pd.DataFrame:
+def consensus_status(status: pd.DataFrame, alternative: pd.DataFrame | None = None) -> pd.DataFrame:
     """
     Per-state consensus of transport statuses across backends (one column per backend).
 
@@ -58,7 +56,11 @@ def consensus_status(
             continue
         accept = []
         for b in present.index:
-            alt = alternative.loc[idx, b] if (idx in alternative.index and b in alternative.columns) else None
+            alt = (
+                alternative.loc[idx, b]
+                if (idx in alternative.index and b in alternative.columns)
+                else None
+            )
             s = {str(present[b])}
             if isinstance(alt, str) and alt:
                 s.add(alt)
@@ -195,11 +197,16 @@ def compare_backends(
     routes = {n: r for n, r in results.items() if isinstance(r, TransportRoute)}
     if len(routes) == len(results):
         status = pd.DataFrame({n: r.states["status"] for n, r in routes.items()}).reindex(states)
-        col = {"cutoff": "status_alternative", "interval": "status_interval_alternative"}.get(tolerance)
+        col = {"cutoff": "status_alternative", "interval": "status_interval_alternative"}.get(
+            tolerance
+        )
         alternative = None
         if col is not None:
             alternative = pd.DataFrame(
-                {n: (r.states[col] if col in r.states else pd.Series("", index=r.states.index)) for n, r in routes.items()}
+                {
+                    n: (r.states[col] if col in r.states else pd.Series("", index=r.states.index))
+                    for n, r in routes.items()
+                }
             ).reindex(states)
         status = consensus_status(status, alternative)
     return BackendComparison(
